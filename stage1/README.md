@@ -55,9 +55,17 @@ source .venv/bin/activate
 python -m pip install --upgrade pip
 ```
 
-Install GPU PyTorch (pick your CUDA wheel from pytorch.org), then:
+Use Aliyun as default pip mirror first:
 
 ```bash
+pip config set global.index-url https://mirrors.aliyun.com/pypi/simple
+pip config set install.trusted-host mirrors.aliyun.com
+```
+
+Install GPU PyTorch (recommended `cu121`, adjust if needed):
+
+```bash
+pip install --extra-index-url https://download.pytorch.org/whl/cu121 torch torchvision torchaudio
 pip install "cloudpickle>=3.0.0"
 ```
 
@@ -80,7 +88,7 @@ docker run -itd \
   -e MASTER_PORT=29500 \
   -v "$(pwd):/workspace/torch-worker" \
   -w /workspace/torch-worker \
-  python:3.11-bookworm \
+  docker.m.daocloud.io/library/python:3.11-bookworm \
   sleep infinity
 ```
 
@@ -90,8 +98,16 @@ Enter container and install CPU dependencies:
 docker exec -it stage1-driver bash
 cd /workspace/torch-worker
 python -m pip install --upgrade pip
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+pip config set global.index-url https://mirrors.aliyun.com/pypi/simple
+pip config set install.trusted-host mirrors.aliyun.com
+pip install torch torchvision torchaudio
 pip install "cloudpickle>=3.0.0"
+```
+
+CPU check in container:
+
+```bash
+python -c "import torch; print(torch.__version__, torch.cuda.is_available())"
 ```
 
 ---

@@ -1,0 +1,13 @@
+{
+  "temp_feat": 7,
+  "in_feat": 256,
+  "hidden_feat": 256,
+  "out_feat": 256,
+  "pred_feat" :1,
+  "bias": 0,
+  "batch_size": 1,
+  "drop_rate": 0.2,
+  "target_nodes": 200,
+  "trials": 1,
+  "epochs": 300
+}
