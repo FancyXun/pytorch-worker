@@ -1193,6 +1193,42 @@ class DistributedDataParallel(Module, Joinable):
         # Note: reverse list of buckets because we want to approximate the
         # order in which their gradients are produced, and assume they
         # are used in the forward pass in the order they are defined.
+        ddp_asymmetric_mode = os.environ.get("TORCH_DDP_ASYMMETRIC_MODE", "0") == "1"
+        trainer_rank_env = os.environ.get("TORCH_DDP_TRAINER_RANK", "")
+        if ddp_asymmetric_mode:
+            ddp_trainer_rank = int(trainer_rank_env) if trainer_rank_env != "" else -1
+            # Experimental escape hatch for asymmetric training experiments.
+            # When enabled, C++ Reducer bypasses default gradient allreduce.
+            ddp_skip_allreduce = os.environ.get("TORCH_DDP_SKIP_ALLREDUCE", "0") == "1"
+            ddp_sync_interval = int(os.environ.get("TORCH_DDP_SYNC_INTERVAL", "1"))
+            if ddp_sync_interval < 1:
+                raise ValueError("TORCH_DDP_SYNC_INTERVAL must be >= 1")
+            ddp_non_trainer_backward = os.environ.get(
+                "TORCH_DDP_NON_TRAINER_BACKWARD", "error"
+            ).lower()
+            if ddp_non_trainer_backward not in ("allow", "warn", "error"):
+                raise ValueError(
+                    "TORCH_DDP_NON_TRAINER_BACKWARD must be one of: allow, warn, error"
+                )
+        else:
+            if trainer_rank_env != "":
+                warnings.warn(
+                    "TORCH_DDP_TRAINER_RANK is set but TORCH_DDP_ASYMMETRIC_MODE!=1; "
+                    "ignoring asymmetric DDP settings.",
+                    stacklevel=2,
+                )
+            ddp_trainer_rank = -1
+            ddp_skip_allreduce = False
+            ddp_sync_interval = 1
+            ddp_non_trainer_backward = "allow"
+        self._ddp_asymmetric_mode = ddp_asymmetric_mode
+        self._ddp_trainer_rank = ddp_trainer_rank
+        self._ddp_sync_interval = ddp_sync_interval
+        self._ddp_non_trainer_backward = ddp_non_trainer_backward
+        self._ddp_step_count = 0
+        self._ddp_non_trainer_step_warned = False
+        self._ddp_non_trainer_backward_warned = False
+        self._ddp_asymmetric_logged = False
         self.reducer = dist.Reducer(
             parameters,
             list(reversed(bucket_indices)),
@@ -1215,7 +1251,11 @@ class DistributedDataParallel(Module, Joinable):
                 if self.bucket_bytes_cap_default
                 else self.bucket_bytes_cap
             ),
+            ddp_trainer_rank,
+            ddp_skip_allreduce,
         )
+        self._ddp_is_trainer_rank = self.reducer._is_trainer_rank()
+        self._log_asymmetric_config_once()
 
         self.logger = dist.Logger(self.reducer)
         # Set as a weak reference to avoid reference cycle between
@@ -1269,6 +1309,140 @@ class DistributedDataParallel(Module, Joinable):
             self.reducer._set_static_graph()
             assert self.logger is not None
             self.logger._set_static_graph()
+        self.__dict__.setdefault("_ddp_trainer_rank", -1)
+        self.__dict__.setdefault("_ddp_is_trainer_rank", True)
+        self.__dict__.setdefault("_ddp_asymmetric_mode", False)
+        self.__dict__.setdefault("_ddp_sync_interval", 1)
+        self.__dict__.setdefault("_ddp_non_trainer_backward", "allow")
+        self.__dict__.setdefault("_ddp_step_count", 0)
+        self.__dict__.setdefault("_ddp_non_trainer_step_warned", False)
+        self.__dict__.setdefault("_ddp_non_trainer_backward_warned", False)
+        self.__dict__.setdefault("_ddp_asymmetric_logged", False)
+
+    def _get_asymmetric_config(self):
+        return {
+            "enabled": bool(getattr(self, "_ddp_asymmetric_mode", False)),
+            "trainer_rank": int(getattr(self, "_ddp_trainer_rank", -1)),
+            "is_trainer_rank": bool(getattr(self, "_ddp_is_trainer_rank", True)),
+            "sync_interval": int(getattr(self, "_ddp_sync_interval", 1)),
+            "non_trainer_backward": getattr(
+                self, "_ddp_non_trainer_backward", "allow"
+            ),
+            "skip_allreduce": bool(self.reducer._skip_allreduce()),
+        }
+
+    def _log_asymmetric_config_once(self):
+        if not getattr(self, "_ddp_asymmetric_mode", False):
+            return
+        if getattr(self, "_ddp_asymmetric_logged", False):
+            return
+        cfg = self._get_asymmetric_config()
+        try:
+            rank = dist.get_rank(self.process_group)
+        except Exception:
+            rank = "unknown"
+        logger.warning(
+            "DDP asymmetric mode active on rank=%s | trainer_rank=%s | "
+            "is_trainer_rank=%s | skip_allreduce=%s | sync_interval=%s | "
+            "non_trainer_backward=%s",
+            rank,
+            cfg["trainer_rank"],
+            cfg["is_trainer_rank"],
+            cfg["skip_allreduce"],
+            cfg["sync_interval"],
+            cfg["non_trainer_backward"],
+        )
+        self._ddp_asymmetric_logged = True
+
+    def get_asymmetric_mode_config(self):
+        """
+        Return current asymmetric DDP runtime config for diagnostics.
+        """
+        return self._get_asymmetric_config()
+
+    def is_trainer_rank(self):
+        """
+        Returns True if this rank is designated as trainer rank.
+        If TORCH_DDP_TRAINER_RANK is unset, all ranks are treated as trainer ranks.
+        """
+        return bool(getattr(self, "_ddp_is_trainer_rank", True))
+
+    def sync_params_from_trainer(self):
+        """
+        Broadcast model parameters and buffers from trainer rank.
+
+        Set env TORCH_DDP_ASYMMETRIC_MODE=1 and TORCH_DDP_TRAINER_RANK to enable this helper.
+        Intended to be called explicitly after optimizer.step() in asymmetric training.
+        """
+        if not getattr(self, "_ddp_asymmetric_mode", False):
+            raise RuntimeError(
+                "sync_params_from_trainer requires TORCH_DDP_ASYMMETRIC_MODE=1"
+            )
+        trainer_rank = getattr(self, "_ddp_trainer_rank", -1)
+        if trainer_rank < 0:
+            raise RuntimeError(
+                "sync_params_from_trainer requires TORCH_DDP_TRAINER_RANK to be set"
+            )
+        for p in self.module.parameters():
+            dist.broadcast(p.data, src=trainer_rank, group=self.process_group)
+        for b in self.module.buffers():
+            dist.broadcast(b.data, src=trainer_rank, group=self.process_group)
+
+    def trainer_step(self, optimizer):
+        """
+        Unified asymmetric step helper.
+
+        Call on all ranks after backward:
+          - trainer rank: executes optimizer.step()
+          - all ranks: synchronize params/buffers from trainer rank every N steps
+            (N = TORCH_DDP_SYNC_INTERVAL, default 1)
+        """
+        if not getattr(self, "_ddp_asymmetric_mode", False):
+            if optimizer is None:
+                raise RuntimeError("trainer_step requires a valid optimizer")
+            optimizer.step()
+            return
+
+        if self.is_trainer_rank():
+            if optimizer is None:
+                raise RuntimeError("trainer rank requires a valid optimizer")
+            optimizer.step()
+        elif optimizer is not None and not self._ddp_non_trainer_step_warned:
+            warnings.warn(
+                "Non-trainer rank received optimizer in trainer_step(); "
+                "optimizer.step() is ignored on this rank.",
+                stacklevel=2,
+            )
+            self._ddp_non_trainer_step_warned = True
+
+        if not self.is_trainer_rank():
+            non_trainer_backward_policy = getattr(
+                self, "_ddp_non_trainer_backward", "allow"
+            )
+            has_non_trainer_grads = any(
+                p.grad is not None for p in self.module.parameters()
+            )
+            if has_non_trainer_grads and non_trainer_backward_policy != "allow":
+                msg = (
+                    "Non-trainer rank observed local gradients in asymmetric mode. "
+                    "This usually means backward() ran on follower rank, which is "
+                    "not the intended execution model."
+                )
+                if non_trainer_backward_policy == "error":
+                    raise RuntimeError(msg)
+                if (
+                    non_trainer_backward_policy == "warn"
+                    and not self._ddp_non_trainer_backward_warned
+                ):
+                    warnings.warn(msg, stacklevel=2)
+                    self._ddp_non_trainer_backward_warned = True
+            # Drop local grads on non-trainer rank to reduce accidental misuse.
+            for p in self.module.parameters():
+                p.grad = None
+
+        self._ddp_step_count += 1
+        if self._ddp_step_count % self._ddp_sync_interval == 0:
+            self.sync_params_from_trainer()
 
     def _build_params_for_reducer(self):
         # Build tuple of (module, parameter) for all parameters that require grads.

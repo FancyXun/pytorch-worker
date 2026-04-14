@@ -97,7 +97,9 @@ Reducer::Reducer(
     bool find_unused_parameters,
     bool gradient_as_bucket_view,
     std::unordered_map<size_t, std::string> param_names,
-    int64_t first_bucket_bytes_cap)
+    int64_t first_bucket_bytes_cap,
+    int64_t trainer_rank,
+    bool skip_allreduce)
     : params_(std::move(params)),
       process_group_(std::move(process_group)),
       expect_sparse_gradients_(std::move(expect_sparse_gradients)),
@@ -107,6 +109,10 @@ Reducer::Reducer(
       has_marked_unused_parameters_(false),
       find_unused_parameters_(find_unused_parameters),
       gradient_as_bucket_view_(gradient_as_bucket_view),
+      trainer_rank_(trainer_rank),
+      skip_allreduce_(
+          skip_allreduce ||
+          (trainer_rank_ >= 0 && process_group_->getRank() != trainer_rank_)),
       local_used_map_reduced_(false),
       num_iterations_(0),
       num_bwd_calls_(0),
@@ -941,6 +947,13 @@ c10::intrusive_ptr<c10::ivalue::Future> Reducer::run_comm_hook(
 
 c10::intrusive_ptr<c10::ivalue::Future> Reducer::run_allreduce_hook(
     GradBucket& grad_bucket) {
+  if (skip_allreduce_) {
+    auto noop_fut = c10::make_intrusive<c10::ivalue::Future>(
+        c10::ListType::create(c10::TensorType::get()));
+    noop_fut->markCompleted(
+        c10::IValue(std::vector<at::Tensor>{grad_bucket.getBufferRef()}));
+    return noop_fut;
+  }
   _AllReduceBySumCommHook allreduce_hook(process_group_);
   return allreduce_hook.runHook(grad_bucket);
 }

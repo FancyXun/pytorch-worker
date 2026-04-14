@@ -547,7 +547,9 @@ An enum-like class for built-in communication hooks: ``ALLREDUCE`` and ``FP16_CO
               bool,
               bool,
               std::unordered_map<size_t, std::string>,
-              int64_t>(),
+              int64_t,
+              int64_t,
+              bool>(),
           py::arg("params"),
           py::arg("bucket_indices"),
           py::arg("per_bucket_size_limits"),
@@ -559,6 +561,8 @@ An enum-like class for built-in communication hooks: ``ALLREDUCE`` and ``FP16_CO
           py::arg("param_to_name_mapping") =
               std::unordered_map<size_t, std::string>(),
           py::arg("first_bucket_bytes_cap") = ::c10d::kDefaultFirstBucketBytes,
+          py::arg("trainer_rank") = -1,
+          py::arg("skip_allreduce") = false,
           py::call_guard<py::gil_scoped_release>())
       .def(
           "prepare_for_forward",
@@ -640,6 +644,18 @@ An enum-like class for built-in communication hooks: ``ALLREDUCE`` and ``FP16_CO
       .def(
           "_delay_all_reduce",
           &::c10d::Reducer::delay_all_reduce,
+          py::call_guard<py::gil_scoped_release>())
+      .def(
+          "_is_trainer_rank",
+          &::c10d::Reducer::is_trainer_rank,
+          py::call_guard<py::gil_scoped_release>())
+      .def(
+          "_trainer_rank",
+          &::c10d::Reducer::trainer_rank,
+          py::call_guard<py::gil_scoped_release>())
+      .def(
+          "_skip_allreduce",
+          &::c10d::Reducer::skip_allreduce,
           py::call_guard<py::gil_scoped_release>())
       .def(
           "_run_comm_hook",

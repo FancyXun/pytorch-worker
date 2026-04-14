@@ -58,7 +58,9 @@ class TORCH_API Reducer {
       bool find_unused_parameters,
       bool gradient_as_bucket_view,
       std::unordered_map<size_t, std::string> param_names,
-      int64_t first_bucket_bytes_cap);
+      int64_t first_bucket_bytes_cap,
+      int64_t trainer_rank,
+      bool skip_allreduce);
 
   ~Reducer() noexcept(false);
 
@@ -112,6 +114,18 @@ class TORCH_API Reducer {
   // Runs default allreduce hook.
   c10::intrusive_ptr<c10::ivalue::Future> run_allreduce_hook(
       GradBucket& grad_bucket);
+
+  bool is_trainer_rank() const {
+    return trainer_rank_ < 0 || process_group_->getRank() == trainer_rank_;
+  }
+
+  int64_t trainer_rank() const {
+    return trainer_rank_;
+  }
+
+  bool skip_allreduce() const {
+    return skip_allreduce_;
+  }
 
   // Returns gradient buckets in sequential order of buckets_. This is the order
   // in which buckets are reduced across processes. If return_zero_tensors=true,
@@ -232,6 +246,14 @@ class TORCH_API Reducer {
   const bool find_unused_parameters_;
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
   const bool gradient_as_bucket_view_;
+  // If >= 0, only trainer_rank_ should participate in gradient allreduce.
+  // Non-trainer ranks keep local gradients (no allreduce).
+  // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
+  const int64_t trainer_rank_;
+  // If true, Reducer will bypass default gradient allreduce and keep local grads.
+  // This is an opt-in escape hatch for asymmetric training experiments.
+  // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
+  const bool skip_allreduce_;
   // NOLINTNEXTLINE(cppcoreguidelines-non-private-member-variables-in-classes)
   std::vector<size_t> unused_parameters_;
   // Previous iteration's unused params, used for checking if unused parameters
