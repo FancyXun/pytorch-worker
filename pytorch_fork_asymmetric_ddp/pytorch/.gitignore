@@ -378,3 +378,9 @@ android/pytorch_android_torchvision/.cxx
 .arcconfig
 .stable_pyre_client
 .pyre_client
+
+# Keep generated sources required by out-of-tree CMake builds
+!third_party/protobuf/src/google/protobuf/**/*.pb.cc
+!third_party/protobuf/src/google/protobuf/**/*.pb.h
+!third_party/XNNPACK/src/**/gen/
+!third_party/XNNPACK/src/**/gen/**
