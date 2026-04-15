@@ -35,6 +35,13 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Expect non-trainer backward to raise when policy=error.",
     )
+    parser.add_argument(
+        "--skip-allreduce",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="Set TORCH_DDP_SKIP_ALLREDUCE (default: 1 for asymmetric mode).",
+    )
     return parser.parse_args()
 
 
@@ -60,6 +67,7 @@ def main() -> None:
     os.environ["TORCH_DDP_TRAINER_RANK"] = str(args.trainer_rank)
     os.environ["TORCH_DDP_SYNC_INTERVAL"] = str(args.sync_interval)
     os.environ["TORCH_DDP_NON_TRAINER_BACKWARD"] = args.non_trainer_backward
+    os.environ["TORCH_DDP_SKIP_ALLREDUCE"] = str(args.skip_allreduce)
 
     torch.manual_seed(2026 + rank)
     model = torch.nn.Sequential(
@@ -107,7 +115,8 @@ def main() -> None:
                 "Expected non-trainer backward error, but backward succeeded."
             )
 
-        ddp.trainer_step(optimizer)
+        # Non-trainer should not pass optimizer to avoid warnings.
+        ddp.trainer_step(optimizer if is_trainer else None)
 
         # After trainer_step, all ranks should have identical parameters.
         param_sum = sum(float(p.detach().float().sum().item()) for p in ddp.parameters())
