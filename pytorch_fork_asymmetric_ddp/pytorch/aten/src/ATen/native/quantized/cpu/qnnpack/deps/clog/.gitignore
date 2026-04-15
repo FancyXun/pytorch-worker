@@ -2,19 +2,12 @@
 build.ninja
 
 # Build objects and artifacts
-deps/*
-!deps/clog/
-!deps/clog/**
+deps/
 build/
-build-*/
 bin/
 lib/
-out/
-obj/
-libs/
 *.pyc
 *.pyo
-*.log
 
 # System files
 .DS_Store

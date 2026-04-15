@@ -36,6 +36,17 @@ You can instead attach `pytorch/` as a **git submodule** from the `torch-worker`
 
 ---
 
+## Build prerequisites (common failure)
+
+`python setup.py develop` / `pip install -e .` expects **`cmake` or `cmake3` ≥ 3.18** on `PATH`. If you see `RuntimeError: no cmake or cmake3 with version >= 3.18.0 found`:
+
+- **Debian / Ubuntu:** `apt-get update && apt-get install -y cmake ninja-build build-essential`, then `cmake --version`.
+- **CMake still too old:** `python3 -m pip install "cmake>=3.18"` and put `$(python3 -m site --user-base)/bin` on `PATH`.
+
+Full dependency list remains the [official from-source guide](https://github.com/pytorch/pytorch#from-source).
+
+---
+
 ## Build (reference)
 
 Follow [PyTorch from source](https://github.com/pytorch/pytorch#from-source) for your platform. Typical pattern:
