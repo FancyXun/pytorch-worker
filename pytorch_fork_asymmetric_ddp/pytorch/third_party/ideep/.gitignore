@@ -26,3 +26,10 @@ python/ideep4py/share
 python/ideep4py/py/ideep4py.py
 !python/ideep4py/include/utils.h
 python/.pytest_cache
+
+# keep oneDNN sources for vendored PyTorch builds
+!mkl-dnn/**/*.cpp
+!mkl-dnn/**/*.cc
+!mkl-dnn/**/*.c
+!mkl-dnn/**/*.h
+!mkl-dnn/**/*.hpp
