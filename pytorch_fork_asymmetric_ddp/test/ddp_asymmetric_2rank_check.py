@@ -4,9 +4,8 @@
 Run with:
   torchrun --standalone --nnodes=1 --nproc_per_node=2 test/ddp_asymmetric_2rank_check.py
 
-Optional policy check:
-  torchrun --standalone --nnodes=1 --nproc_per_node=2 \
-    test/ddp_asymmetric_2rank_check.py --non-trainer-backward error --expect-non-trainer-error
+This check intentionally skips backward on non-trainer ranks to validate
+the "GPU trainer does backward/step, follower only syncs params" workflow.
 """
 
 from __future__ import annotations
@@ -29,11 +28,6 @@ def parse_args() -> argparse.Namespace:
         "--non-trainer-backward",
         choices=("allow", "warn", "error"),
         default="allow",
-    )
-    parser.add_argument(
-        "--expect-non-trainer-error",
-        action="store_true",
-        help="Expect non-trainer backward to raise when policy=error.",
     )
     parser.add_argument(
         "--skip-allreduce",
@@ -92,28 +86,9 @@ def main() -> None:
         out = ddp(x)
         loss = torch.nn.functional.mse_loss(out, y)
 
-        non_trainer_got_error = False
-        try:
+        # In this scenario, only trainer rank computes backward.
+        if is_trainer:
             loss.backward()
-        except RuntimeError:
-            if (
-                (not is_trainer)
-                and args.non_trainer_backward == "error"
-                and args.expect_non_trainer_error
-            ):
-                non_trainer_got_error = True
-            else:
-                raise
-
-        if (
-            (not is_trainer)
-            and args.non_trainer_backward == "error"
-            and args.expect_non_trainer_error
-            and (not non_trainer_got_error)
-        ):
-            raise RuntimeError(
-                "Expected non-trainer backward error, but backward succeeded."
-            )
 
         # Non-trainer should not pass optimizer to avoid warnings.
         ddp.trainer_step(optimizer if is_trainer else None)
