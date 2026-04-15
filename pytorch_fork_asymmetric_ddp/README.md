@@ -43,6 +43,16 @@ You can instead attach `pytorch/` as a **git submodule** from the `torch-worker`
 - **Debian / Ubuntu:** `apt-get update && apt-get install -y cmake ninja-build build-essential`, then `cmake --version`.
 - **CMake still too old:** `python3 -m pip install "cmake>=3.18"` and put `$(python3 -m site --user-base)/bin` on `PATH`.
 
+**Python packages before configure:** CMake runs `torchgen` with the same interpreter as `python3 setup.py`. If you see `ModuleNotFoundError: No module named 'typing_extensions'`, install build deps for that interpreter:
+
+```bash
+cd pytorch_fork_asymmetric_ddp/pytorch
+python3 -m pip install typing_extensions pyyaml
+python3 -m pip install -r requirements.txt
+```
+
+Use the **same** venv/conda env for `pip` and `setup.py`.
+
 Full dependency list remains the [official from-source guide](https://github.com/pytorch/pytorch#from-source).
 
 ---
