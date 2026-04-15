@@ -46,6 +46,20 @@ def assert_close(values: List[float], tol: float, name: str) -> None:
         raise RuntimeError(f"{name} mismatch across ranks: values={values}, tol={tol}")
 
 
+def gather_scalar_float(value: float, world_size: int) -> List[float]:
+    local = torch.tensor([value], dtype=torch.float64)
+    gathered = [torch.zeros(1, dtype=torch.float64) for _ in range(world_size)]
+    dist.all_gather(gathered, local)
+    return [float(t.item()) for t in gathered]
+
+
+def gather_scalar_int(value: int, world_size: int) -> List[int]:
+    local = torch.tensor([value], dtype=torch.int64)
+    gathered = [torch.zeros(1, dtype=torch.int64) for _ in range(world_size)]
+    dist.all_gather(gathered, local)
+    return [int(t.item()) for t in gathered]
+
+
 def main() -> None:
     args = parse_args()
     dist.init_process_group(backend="gloo")
@@ -95,14 +109,12 @@ def main() -> None:
 
         # After trainer_step, all ranks should have identical parameters.
         param_sum = sum(float(p.detach().float().sum().item()) for p in ddp.parameters())
-        gathered_param_sum = [None for _ in range(world_size)]
-        dist.all_gather_object(gathered_param_sum, param_sum)
+        gathered_param_sum = gather_scalar_float(param_sum, world_size)
         assert_close(gathered_param_sum, tol=1e-5, name=f"param_sum_step{step}")
 
         # Non-trainer grads should be cleared by trainer_step according to the patch.
         grad_count = sum(0 if p.grad is None else 1 for p in ddp.parameters())
-        gathered_grad_count = [None for _ in range(world_size)]
-        dist.all_gather_object(gathered_grad_count, grad_count)
+        gathered_grad_count = gather_scalar_int(grad_count, world_size)
         if gathered_grad_count[1 - args.trainer_rank] != 0:
             raise RuntimeError(
                 "Expected non-trainer grad_count=0 after trainer_step, "
