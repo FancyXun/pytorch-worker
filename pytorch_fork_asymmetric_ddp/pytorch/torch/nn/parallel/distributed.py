@@ -1378,6 +1378,14 @@ class DistributedDataParallel(Module, Joinable):
         return bool(getattr(self, "_ddp_is_trainer_rank", True))
 
     def _should_run_backward_runtime(self):
+        # In asymmetric mode with skip_allreduce, bypass reducer backward runtime
+        # on all ranks. Parameter synchronization is driven explicitly by
+        # trainer_step()/sync_params_from_trainer().
+        if (
+            getattr(self, "_ddp_asymmetric_mode", False)
+            and bool(self.reducer._skip_allreduce())
+        ):
+            return False
         # In asymmetric mode, follower ranks can run in forward-only mode to
         # avoid reducer state transitions when backward is intentionally skipped.
         if (
