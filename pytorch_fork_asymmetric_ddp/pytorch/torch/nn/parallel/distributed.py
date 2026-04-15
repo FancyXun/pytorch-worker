@@ -1200,6 +1200,9 @@ class DistributedDataParallel(Module, Joinable):
             # Experimental escape hatch for asymmetric training experiments.
             # When enabled, C++ Reducer bypasses default gradient allreduce.
             ddp_skip_allreduce = os.environ.get("TORCH_DDP_SKIP_ALLREDUCE", "0") == "1"
+            ddp_hetero_param_sync = (
+                os.environ.get("TORCH_DDP_HETERO_PARAM_SYNC", "0") == "1"
+            )
             ddp_non_trainer_forward_only = (
                 os.environ.get("TORCH_DDP_NON_TRAINER_FORWARD_ONLY", "1") == "1"
             )
@@ -1222,6 +1225,7 @@ class DistributedDataParallel(Module, Joinable):
                 )
             ddp_trainer_rank = -1
             ddp_skip_allreduce = False
+            ddp_hetero_param_sync = False
             ddp_non_trainer_forward_only = False
             ddp_sync_interval = 1
             ddp_non_trainer_backward = "allow"
@@ -1229,6 +1233,7 @@ class DistributedDataParallel(Module, Joinable):
         self._ddp_trainer_rank = ddp_trainer_rank
         self._ddp_sync_interval = ddp_sync_interval
         self._ddp_non_trainer_backward = ddp_non_trainer_backward
+        self._ddp_hetero_param_sync = ddp_hetero_param_sync
         self._ddp_non_trainer_forward_only = ddp_non_trainer_forward_only
         self._ddp_step_count = 0
         self._ddp_non_trainer_step_warned = False
@@ -1319,6 +1324,7 @@ class DistributedDataParallel(Module, Joinable):
         self.__dict__.setdefault("_ddp_asymmetric_mode", False)
         self.__dict__.setdefault("_ddp_sync_interval", 1)
         self.__dict__.setdefault("_ddp_non_trainer_backward", "allow")
+        self.__dict__.setdefault("_ddp_hetero_param_sync", False)
         self.__dict__.setdefault("_ddp_non_trainer_forward_only", False)
         self.__dict__.setdefault("_ddp_step_count", 0)
         self.__dict__.setdefault("_ddp_non_trainer_step_warned", False)
@@ -1334,6 +1340,7 @@ class DistributedDataParallel(Module, Joinable):
             "non_trainer_backward": getattr(
                 self, "_ddp_non_trainer_backward", "allow"
             ),
+            "hetero_param_sync": bool(getattr(self, "_ddp_hetero_param_sync", False)),
             "non_trainer_forward_only": bool(
                 getattr(self, "_ddp_non_trainer_forward_only", False)
             ),
@@ -1353,13 +1360,15 @@ class DistributedDataParallel(Module, Joinable):
         logger.warning(
             "DDP asymmetric mode active on rank=%s | trainer_rank=%s | "
             "is_trainer_rank=%s | skip_allreduce=%s | sync_interval=%s | "
-            "non_trainer_backward=%s | non_trainer_forward_only=%s",
+            "non_trainer_backward=%s | hetero_param_sync=%s | "
+            "non_trainer_forward_only=%s",
             rank,
             cfg["trainer_rank"],
             cfg["is_trainer_rank"],
             cfg["skip_allreduce"],
             cfg["sync_interval"],
             cfg["non_trainer_backward"],
+            cfg["hetero_param_sync"],
             cfg["non_trainer_forward_only"],
         )
         self._ddp_asymmetric_logged = True
@@ -1412,10 +1421,37 @@ class DistributedDataParallel(Module, Joinable):
             raise RuntimeError(
                 "sync_params_from_trainer requires TORCH_DDP_TRAINER_RANK to be set"
             )
-        for p in self.module.parameters():
-            dist.broadcast(p.data, src=trainer_rank, group=self.process_group)
-        for b in self.module.buffers():
-            dist.broadcast(b.data, src=trainer_rank, group=self.process_group)
+        hetero_param_sync = bool(getattr(self, "_ddp_hetero_param_sync", False))
+        if not hetero_param_sync:
+            for p in self.module.parameters():
+                dist.broadcast(p.data, src=trainer_rank, group=self.process_group)
+            for b in self.module.buffers():
+                dist.broadcast(b.data, src=trainer_rank, group=self.process_group)
+            return
+
+        current_rank = dist.get_rank(self.process_group)
+        with torch.no_grad():
+            for p in self.module.parameters():
+                if current_rank == trainer_rank:
+                    cpu_tensor = p.data.detach().to(device="cpu")
+                else:
+                    cpu_tensor = torch.empty_like(p.data, device="cpu")
+                dist.broadcast(cpu_tensor, src=trainer_rank, group=self.process_group)
+                if p.data.device.type == "cpu":
+                    p.data.copy_(cpu_tensor)
+                else:
+                    p.data.copy_(cpu_tensor.to(device=p.data.device, dtype=p.data.dtype))
+
+            for b in self.module.buffers():
+                if current_rank == trainer_rank:
+                    cpu_tensor = b.data.detach().to(device="cpu")
+                else:
+                    cpu_tensor = torch.empty_like(b.data, device="cpu")
+                dist.broadcast(cpu_tensor, src=trainer_rank, group=self.process_group)
+                if b.data.device.type == "cpu":
+                    b.data.copy_(cpu_tensor)
+                else:
+                    b.data.copy_(cpu_tensor.to(device=b.data.device, dtype=b.data.dtype))
 
     def trainer_step(self, optimizer):
         """
