@@ -1200,6 +1200,9 @@ class DistributedDataParallel(Module, Joinable):
             # Experimental escape hatch for asymmetric training experiments.
             # When enabled, C++ Reducer bypasses default gradient allreduce.
             ddp_skip_allreduce = os.environ.get("TORCH_DDP_SKIP_ALLREDUCE", "0") == "1"
+            ddp_non_trainer_forward_only = (
+                os.environ.get("TORCH_DDP_NON_TRAINER_FORWARD_ONLY", "1") == "1"
+            )
             ddp_sync_interval = int(os.environ.get("TORCH_DDP_SYNC_INTERVAL", "1"))
             if ddp_sync_interval < 1:
                 raise ValueError("TORCH_DDP_SYNC_INTERVAL must be >= 1")
@@ -1219,12 +1222,14 @@ class DistributedDataParallel(Module, Joinable):
                 )
             ddp_trainer_rank = -1
             ddp_skip_allreduce = False
+            ddp_non_trainer_forward_only = False
             ddp_sync_interval = 1
             ddp_non_trainer_backward = "allow"
         self._ddp_asymmetric_mode = ddp_asymmetric_mode
         self._ddp_trainer_rank = ddp_trainer_rank
         self._ddp_sync_interval = ddp_sync_interval
         self._ddp_non_trainer_backward = ddp_non_trainer_backward
+        self._ddp_non_trainer_forward_only = ddp_non_trainer_forward_only
         self._ddp_step_count = 0
         self._ddp_non_trainer_step_warned = False
         self._ddp_non_trainer_backward_warned = False
@@ -1314,6 +1319,7 @@ class DistributedDataParallel(Module, Joinable):
         self.__dict__.setdefault("_ddp_asymmetric_mode", False)
         self.__dict__.setdefault("_ddp_sync_interval", 1)
         self.__dict__.setdefault("_ddp_non_trainer_backward", "allow")
+        self.__dict__.setdefault("_ddp_non_trainer_forward_only", False)
         self.__dict__.setdefault("_ddp_step_count", 0)
         self.__dict__.setdefault("_ddp_non_trainer_step_warned", False)
         self.__dict__.setdefault("_ddp_non_trainer_backward_warned", False)
@@ -1327,6 +1333,9 @@ class DistributedDataParallel(Module, Joinable):
             "sync_interval": int(getattr(self, "_ddp_sync_interval", 1)),
             "non_trainer_backward": getattr(
                 self, "_ddp_non_trainer_backward", "allow"
+            ),
+            "non_trainer_forward_only": bool(
+                getattr(self, "_ddp_non_trainer_forward_only", False)
             ),
             "skip_allreduce": bool(self.reducer._skip_allreduce()),
         }
@@ -1344,13 +1353,14 @@ class DistributedDataParallel(Module, Joinable):
         logger.warning(
             "DDP asymmetric mode active on rank=%s | trainer_rank=%s | "
             "is_trainer_rank=%s | skip_allreduce=%s | sync_interval=%s | "
-            "non_trainer_backward=%s",
+            "non_trainer_backward=%s | non_trainer_forward_only=%s",
             rank,
             cfg["trainer_rank"],
             cfg["is_trainer_rank"],
             cfg["skip_allreduce"],
             cfg["sync_interval"],
             cfg["non_trainer_backward"],
+            cfg["non_trainer_forward_only"],
         )
         self._ddp_asymmetric_logged = True
 
@@ -1366,6 +1376,17 @@ class DistributedDataParallel(Module, Joinable):
         If TORCH_DDP_TRAINER_RANK is unset, all ranks are treated as trainer ranks.
         """
         return bool(getattr(self, "_ddp_is_trainer_rank", True))
+
+    def _should_run_backward_runtime(self):
+        # In asymmetric mode, follower ranks can run in forward-only mode to
+        # avoid reducer state transitions when backward is intentionally skipped.
+        if (
+            getattr(self, "_ddp_asymmetric_mode", False)
+            and getattr(self, "_ddp_non_trainer_forward_only", False)
+            and not self.is_trainer_rank()
+        ):
+            return False
+        return bool(getattr(self, "require_backward_grad_sync", True))
 
     def sync_params_from_trainer(self):
         """
@@ -1680,7 +1701,7 @@ class DistributedDataParallel(Module, Joinable):
         if self._delay_all_reduce_all_params:
             return inputs, kwargs
 
-        if torch.is_grad_enabled() and self.require_backward_grad_sync:
+        if torch.is_grad_enabled() and self._should_run_backward_runtime():
             assert self.logger is not None
             self.logger.set_runtime_stats_and_log()
             self.reducer.prepare_for_forward()
@@ -1752,7 +1773,7 @@ class DistributedDataParallel(Module, Joinable):
         if self._check_sync_bufs_post_fwd():
             self._sync_buffers()
 
-        if torch.is_grad_enabled() and self.require_backward_grad_sync:
+        if torch.is_grad_enabled() and self._should_run_backward_runtime():
             self.require_forward_param_sync = True
             # We'll return the output object verbatim since it is a freeform
             # object. We need to find any tensors in this object, though,
