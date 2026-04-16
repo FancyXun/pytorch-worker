@@ -17,7 +17,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--master-addr", default="127.0.0.1")
     parser.add_argument("--master-port", type=int, default=29621)
     parser.add_argument("--world-size", type=int, default=2)
-    parser.add_argument("--steps", type=int, default=3)
+    parser.add_argument("--steps", type=int, default=200000)
+    parser.add_argument("--target-seconds", type=int, default=0)
+    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--in-dim", type=int, default=1024)
+    parser.add_argument("--hidden-dim", type=int, default=4096)
+    parser.add_argument("--out-dim", type=int, default=1024)
+    parser.add_argument("--log-interval", type=int, default=20)
     return parser.parse_args()
 
 
@@ -30,6 +36,12 @@ def main() -> None:
         master_addr=args.master_addr,
         master_port=args.master_port,
         steps=args.steps,
+        target_seconds=args.target_seconds,
+        batch_size=args.batch_size,
+        in_dim=args.in_dim,
+        hidden_dim=args.hidden_dim,
+        out_dim=args.out_dim,
+        log_interval=args.log_interval,
     )
 
 

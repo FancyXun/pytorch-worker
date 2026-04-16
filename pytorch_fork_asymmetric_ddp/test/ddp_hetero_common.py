@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import List
 
 import torch
@@ -43,6 +44,12 @@ def run_hetero_role(
     master_addr: str,
     master_port: int,
     steps: int,
+    target_seconds: int,
+    batch_size: int,
+    in_dim: int,
+    hidden_dim: int,
+    out_dim: int,
+    log_interval: int,
 ) -> None:
     _configure_asymmetric_env(trainer_rank)
     os.environ["MASTER_ADDR"] = master_addr
@@ -64,9 +71,9 @@ def run_hetero_role(
     # Keep init deterministic so both ranks start from identical parameters.
     torch.manual_seed(2026)
     model = torch.nn.Sequential(
-        torch.nn.Linear(8, 16),
+        torch.nn.Linear(in_dim, hidden_dim),
         torch.nn.ReLU(),
-        torch.nn.Linear(16, 4),
+        torch.nn.Linear(hidden_dim, out_dim),
     ).to(device)
 
     if device.type == "cuda":
@@ -83,9 +90,14 @@ def run_hetero_role(
     )
     dist.barrier()
 
-    for step in range(steps):
-        x = torch.randn(32, 8, device=device)
-        y = torch.randn(32, 4, device=device)
+    start = time.time()
+    step = 0
+    while step < steps:
+        if target_seconds > 0 and (time.time() - start) >= target_seconds:
+            break
+
+        x = torch.randn(batch_size, in_dim, device=device)
+        y = torch.randn(batch_size, out_dim, device=device)
 
         if is_trainer:
             optimizer.zero_grad(set_to_none=True)
@@ -104,16 +116,23 @@ def run_hetero_role(
         grad_count = sum(0 if p.grad is None else 1 for p in ddp.parameters())
         gathered_grad_count = _gather_scalar_int(grad_count, world_size)
 
-        if rank == trainer_rank:
+        if rank == trainer_rank and (step % max(1, log_interval) == 0):
+            elapsed = time.time() - start
             print(
                 f"step={step} loss={float(loss.item()):.6f} "
-                f"param_sum={gathered_param_sum} grad_count={gathered_grad_count}",
+                f"param_sum={gathered_param_sum} grad_count={gathered_grad_count} "
+                f"elapsed={elapsed:.1f}s",
                 flush=True,
             )
 
         dist.barrier()
+        step += 1
 
     if rank == trainer_rank:
-        print("Hetero asymmetric DDP demo: PASS", flush=True)
+        print(
+            f"Hetero asymmetric DDP demo: PASS "
+            f"(steps={step}, elapsed={time.time() - start:.1f}s)",
+            flush=True,
+        )
     dist.destroy_process_group()
 
