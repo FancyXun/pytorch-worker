@@ -5,26 +5,11 @@ from __future__ import annotations
 
 import os
 import time
-from typing import List
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
-
-
-def _gather_scalar_float(value: float, world_size: int) -> List[float]:
-    local = torch.tensor([value], dtype=torch.float64)
-    gathered = [torch.zeros(1, dtype=torch.float64) for _ in range(world_size)]
-    dist.all_gather(gathered, local)
-    return [float(t.item()) for t in gathered]
-
-
-def _gather_scalar_int(value: int, world_size: int) -> List[int]:
-    local = torch.tensor([value], dtype=torch.int64)
-    gathered = [torch.zeros(1, dtype=torch.int64) for _ in range(world_size)]
-    dist.all_gather(gathered, local)
-    return [int(t.item()) for t in gathered]
-
 
 def _configure_asymmetric_env(trainer_rank: int) -> None:
     os.environ["TORCH_DDP_ASYMMETRIC_MODE"] = "1"
@@ -44,12 +29,13 @@ def run_hetero_role(
     master_addr: str,
     master_port: int,
     steps: int,
-    target_seconds: int,
     batch_size: int,
     in_dim: int,
     hidden_dim: int,
     out_dim: int,
     log_interval: int,
+    save_every_steps: int,
+    save_dir: str,
 ) -> None:
     _configure_asymmetric_env(trainer_rank)
     os.environ["MASTER_ADDR"] = master_addr
@@ -91,11 +77,12 @@ def run_hetero_role(
     dist.barrier()
 
     start = time.time()
+    ckpt_dir = Path(save_dir) if save_every_steps > 0 else None
+    if ckpt_dir is not None and (not is_trainer):
+        ckpt_dir.mkdir(parents=True, exist_ok=True)
+
     step = 0
     while step < steps:
-        if target_seconds > 0 and (time.time() - start) >= target_seconds:
-            break
-
         x = torch.randn(batch_size, in_dim, device=device)
         y = torch.randn(batch_size, out_dim, device=device)
 
@@ -111,19 +98,31 @@ def run_hetero_role(
 
         ddp.trainer_step(optimizer if is_trainer else None)
 
-        param_sum = sum(float(p.detach().float().sum().item()) for p in ddp.parameters())
-        gathered_param_sum = _gather_scalar_float(param_sum, world_size)
-        grad_count = sum(0 if p.grad is None else 1 for p in ddp.parameters())
-        gathered_grad_count = _gather_scalar_int(grad_count, world_size)
-
         if rank == trainer_rank and (step % max(1, log_interval) == 0):
             elapsed = time.time() - start
             print(
-                f"step={step} loss={float(loss.item()):.6f} "
-                f"param_sum={gathered_param_sum} grad_count={gathered_grad_count} "
-                f"elapsed={elapsed:.1f}s",
+                f"step={step} trainer_loss={float(loss.item()):.6f} elapsed={elapsed:.1f}s",
                 flush=True,
             )
+        elif (not is_trainer) and (step % max(1, log_interval) == 0):
+            elapsed = time.time() - start
+            print(
+                f"step={step} follower_loss={float(loss.item()):.6f} "
+                f"follower_sync_ok elapsed={elapsed:.1f}s",
+                flush=True,
+            )
+
+        if (not is_trainer) and ckpt_dir is not None and ((step + 1) % save_every_steps == 0):
+            ckpt_path = ckpt_dir / f"follower_step_{step + 1}.pt"
+            torch.save(
+                {
+                    "model": ddp.module.state_dict(),
+                    "step": step + 1,
+                    "saved_at": time.time(),
+                },
+                ckpt_path,
+            )
+            print(f"[rank{rank}] checkpoint_saved={ckpt_path}", flush=True)
 
         dist.barrier()
         step += 1
