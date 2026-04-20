@@ -10,21 +10,35 @@ Goal:
 from __future__ import annotations
 
 import argparse
+import gzip
 import os
+import struct
 import time
+import urllib.request
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
-try:
+try:  # Optional fast path
     from torchvision import datasets, transforms
+
+    HAS_TORCHVISION = True
+    TORCHVISION_IMPORT_ERROR = None
 except Exception as exc:  # pragma: no cover
-    raise RuntimeError(
-        "torchvision is required for this MNIST demo. "
-        "Please install it in both host and container environments."
-    ) from exc
+    HAS_TORCHVISION = False
+    TORCHVISION_IMPORT_ERROR = exc
+
+
+MNIST_FILES = {
+    "train_images": "train-images-idx3-ubyte.gz",
+    "train_labels": "train-labels-idx1-ubyte.gz",
+    "test_images": "t10k-images-idx3-ubyte.gz",
+    "test_labels": "t10k-labels-idx1-ubyte.gz",
+}
+MNIST_BASE_URL = "https://ossci-datasets.s3.amazonaws.com/mnist/"
 
 
 def parse_args() -> argparse.Namespace:
@@ -94,6 +108,73 @@ class SmallCNN(torch.nn.Module):
         return self.net(x)
 
 
+def _download(url: str, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return
+    urllib.request.urlretrieve(url, path)  # nosec B310
+
+
+def _read_idx_images(path: Path) -> np.ndarray:
+    with gzip.open(path, "rb") as f:
+        magic, num, rows, cols = struct.unpack(">IIII", f.read(16))
+        if magic != 2051:
+            raise RuntimeError(f"Invalid image IDX magic in {path}: {magic}")
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    return data.reshape(num, rows, cols)
+
+
+def _read_idx_labels(path: Path) -> np.ndarray:
+    with gzip.open(path, "rb") as f:
+        magic, num = struct.unpack(">II", f.read(8))
+        if magic != 2049:
+            raise RuntimeError(f"Invalid label IDX magic in {path}: {magic}")
+        data = np.frombuffer(f.read(), dtype=np.uint8)
+    if data.shape[0] != num:
+        raise RuntimeError(f"Label count mismatch in {path}: {data.shape[0]} vs {num}")
+    return data
+
+
+class RawMNISTDataset(torch.utils.data.Dataset):
+    def __init__(self, images: np.ndarray, labels: np.ndarray) -> None:
+        if images.shape[0] != labels.shape[0]:
+            raise RuntimeError("MNIST images/labels length mismatch")
+        self.images = torch.from_numpy(images).to(torch.float32).div_(255.0).unsqueeze(1)
+        self.labels = torch.from_numpy(labels.astype(np.int64))
+        # Match the common MNIST normalization used by torchvision examples.
+        self.images.sub_(0.1307).div_(0.3081)
+
+    def __len__(self) -> int:
+        return int(self.labels.shape[0])
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        return self.images[idx], self.labels[idx]
+
+
+def build_mnist_datasets(data_dir: Path) -> tuple[torch.utils.data.Dataset, torch.utils.data.Dataset]:
+    data_dir.mkdir(parents=True, exist_ok=True)
+    if HAS_TORCHVISION:
+        transform = transforms.Compose(
+            [
+                transforms.ToTensor(),
+                transforms.Normalize((0.1307,), (0.3081,)),
+            ]
+        )
+        train_set = datasets.MNIST(root=str(data_dir), train=True, download=True, transform=transform)
+        test_set = datasets.MNIST(root=str(data_dir), train=False, download=True, transform=transform)
+        return train_set, test_set
+
+    # torchvision may be incompatible with custom-built torch.
+    for fname in MNIST_FILES.values():
+        _download(f"{MNIST_BASE_URL}{fname}", data_dir / fname)
+
+    train_images = _read_idx_images(data_dir / MNIST_FILES["train_images"])
+    train_labels = _read_idx_labels(data_dir / MNIST_FILES["train_labels"])
+    test_images = _read_idx_images(data_dir / MNIST_FILES["test_images"])
+    test_labels = _read_idx_labels(data_dir / MNIST_FILES["test_labels"])
+    return RawMNISTDataset(train_images, train_labels), RawMNISTDataset(test_images, test_labels)
+
+
 def evaluate(model: torch.nn.Module, loader: torch.utils.data.DataLoader, device: torch.device) -> tuple[float, float]:
     model.eval()
     total_loss = 0.0
@@ -149,16 +230,14 @@ def main() -> None:
     if device.type == "cuda":
         torch.cuda.manual_seed_all(2026)
 
-    transform = transforms.Compose(
-        [
-            transforms.ToTensor(),
-            transforms.Normalize((0.1307,), (0.3081,)),
-        ]
-    )
     data_dir = Path(args.data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-    train_set = datasets.MNIST(root=str(data_dir), train=True, download=True, transform=transform)
-    test_set = datasets.MNIST(root=str(data_dir), train=False, download=True, transform=transform)
+    if rank == 0 and (not HAS_TORCHVISION):
+        print(
+            "[rank0] torchvision import failed; using raw MNIST IDX fallback. "
+            f"reason={TORCHVISION_IMPORT_ERROR!r}",
+            flush=True,
+        )
+    train_set, test_set = build_mnist_datasets(data_dir)
 
     train_loader = torch.utils.data.DataLoader(
         train_set,
