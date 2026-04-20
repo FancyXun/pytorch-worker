@@ -821,17 +821,25 @@ class DistributedDataParallel(Module, Joinable):
 
         # Build parameters for reducer.
         parameters, expect_sparse_gradient = self._build_params_for_reducer()
-        # Verify model equivalence.
-        _verify_param_shape_across_processes(self.process_group, parameters)
-        # Sync params and buffers. Ensures all DDP models start off at the same value.
-        _sync_module_states(
-            module=self.module,
-            process_group=self.process_group,
-            broadcast_bucket_size=self.broadcast_bucket_size,
-            src=0,
-            params_and_buffers_to_ignore=self.parameters_to_ignore,
-            broadcast_buffers=self.broadcast_buffers,
+        ddp_asymmetric_mode_init = (
+            os.environ.get("TORCH_DDP_ASYMMETRIC_MODE", "0") == "1"
         )
+        ddp_hetero_param_sync_init = (
+            os.environ.get("TORCH_DDP_HETERO_PARAM_SYNC", "0") == "1"
+        )
+        skip_homogeneous_init = ddp_asymmetric_mode_init and ddp_hetero_param_sync_init
+        if not skip_homogeneous_init:
+            # Verify model equivalence.
+            _verify_param_shape_across_processes(self.process_group, parameters)
+            # Sync params and buffers. Ensures all DDP models start off at the same value.
+            _sync_module_states(
+                module=self.module,
+                process_group=self.process_group,
+                broadcast_bucket_size=self.broadcast_bucket_size,
+                src=0,
+                params_and_buffers_to_ignore=self.parameters_to_ignore,
+                broadcast_buffers=self.broadcast_buffers,
+            )
         # In debug mode, build a mapping of parameter index -> parameter.
         param_to_name_mapping = self._build_debug_param_to_name_mapping(parameters)
 

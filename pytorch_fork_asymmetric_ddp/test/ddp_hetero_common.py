@@ -62,13 +62,10 @@ def run_hetero_role(
         torch.nn.Linear(hidden_dim, out_dim),
     ).to(device)
 
-    # Heterogeneous ranks (trainer on CUDA, follower on CPU) cannot pass
-    # DDP's default init sync/shape verification, which assumes same tensor device type.
-    # Parameters are kept aligned by deterministic seed + trainer_step() sync path.
     if device.type == "cuda":
-        ddp = DDP(model, device_ids=[0], output_device=0, init_sync=False)
+        ddp = DDP(model, device_ids=[0], output_device=0)
     else:
-        ddp = DDP(model, init_sync=False)
+        ddp = DDP(model)
 
     optimizer = torch.optim.SGD(ddp.parameters(), lr=0.1) if is_trainer else None
 
