@@ -1,0 +1,139 @@
+<mxfile host="Electron" agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) draw.io/29.0.3 Chrome/140.0.7339.249 Electron/38.7.0 Safari/537.36" version="29.0.3">
+  <diagram id="dist-logic-standard" name="04_PyTorch_Distributed_Logic">
+    <mxGraphModel dx="2057" dy="1520" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="4681" background="none" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t4" value="PyTorch Native Distributed Logic (DDP Runtime)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=20;fontStyle=1" parent="1" vertex="1">
+          <mxGeometry x="30" y="20" width="1100" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="g1" value="Bootstrap Layer&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#999999;fontSize=13;fontStyle=1;align=left;spacingLeft=8" parent="1" vertex="1">
+          <mxGeometry x="60" y="90" width="1780" height="180" as="geometry" />
+        </mxCell>
+        <mxCell id="g2" value="Per-Rank Training Loop&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#eef3ff;strokeColor=#6c8ebf;fontSize=13;fontStyle=1;align=left;spacingLeft=8" parent="1" vertex="1">
+          <mxGeometry x="60" y="300" width="1780" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="g3" value="Communication + Runtime&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;&lt;div&gt;&lt;br&gt;&lt;/div&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff7e6;strokeColor=#d79b00;fontSize=13;fontStyle=1;align=left;spacingLeft=8" parent="1" vertex="1">
+          <mxGeometry x="60" y="690" width="1780" height="320" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="torchrun / env://&#xa;WORLD_SIZE, RANK, LOCAL_RANK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf" parent="1" vertex="1">
+          <mxGeometry x="110" y="140" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="dist.init_process_group()&#xa;backend=nccl|gloo + rendezvous" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf" parent="1" vertex="1">
+          <mxGeometry x="470" y="140" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="Model to local device&#xa;(cuda:LOCAL_RANK)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf" parent="1" vertex="1">
+          <mxGeometry x="850" y="140" width="270" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n4" value="DDP(model, ... )&#xa;Reducer + bucket metadata setup" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf" parent="1" vertex="1">
+          <mxGeometry x="1180" y="140" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n5" value="Optional state sync&#xa;(broadcast params/buffers)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf" parent="1" vertex="1">
+          <mxGeometry x="1540" y="140" width="250" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n6" value="Forward pass&#xa;each rank reads local shard batch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" parent="1" vertex="1">
+          <mxGeometry x="120" y="380" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n7" value="Backward pass&#xa;autograd hook marks grad ready" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" parent="1" vertex="1">
+          <mxGeometry x="470" y="380" width="300" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n8" value="Reducer bucketize&#xa;group grads by size/order" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366" parent="1" vertex="1">
+          <mxGeometry x="820" y="380" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n9" value="Launch allreduce per ready bucket&#xa;comm/compute overlap" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656" parent="1" vertex="1">
+          <mxGeometry x="1150" y="380" width="330" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n10" value="Grad finalized on every rank&#xa;(sum/avg consistency)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656" parent="1" vertex="1">
+          <mxGeometry x="1530" y="380" width="280" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n11" value="optimizer.step()&#xa;same update rule on each rank" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" parent="1" vertex="1">
+          <mxGeometry x="560" y="530" width="320" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n12" value="next iteration&#xa;weights stay equivalent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450" parent="1" vertex="1">
+          <mxGeometry x="960" y="530" width="260" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="n13" value="ProcessGroup NCCL/Gloo&#xa;collective scheduling + streams" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666" parent="1" vertex="1">
+          <mxGeometry x="150" y="760" width="340" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n14" value="Reducer internals&#xa;bucket state machine + hooks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666" parent="1" vertex="1">
+          <mxGeometry x="560" y="760" width="320" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n15" value="DDP comm hooks (optional)&#xa;fp16 compress / custom strategy" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666" parent="1" vertex="1">
+          <mxGeometry x="940" y="760" width="340" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n16" value="Failure handling&#xa;timeout / async error / abort" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666" parent="1" vertex="1">
+          <mxGeometry x="1340" y="760" width="320" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="n17" value="Hardware fabric&#xa;GPU, NIC, PCIe, NVLink, Ethernet" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666" parent="1" vertex="1">
+          <mxGeometry x="560" y="900" width="700" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="f1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n1" target="n2" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n2" target="n3" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n3" target="n4" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n4" target="n5" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n5" target="n6" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1665" y="330" />
+              <mxPoint x="270" y="330" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n6" target="n7" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n7" target="n8" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n8" target="n9" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n9" target="n10" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n10" target="n11" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1670" y="575" />
+              <mxPoint x="720" y="575" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n11" target="n12" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f12" value="collective path" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;dashed=1;endArrow=block;strokeWidth=2;html=1" parent="1" source="n9" target="n13" edge="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint as="offset" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="f13" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n8" target="n14" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f14" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n9" target="n15" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f15" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n13" target="n16" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f16" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n13" target="n17" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f17" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n14" target="n17" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="f18" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;endArrow=block;strokeWidth=2;html=1" parent="1" source="n15" target="n17" edge="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
