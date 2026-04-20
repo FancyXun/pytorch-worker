@@ -73,9 +73,11 @@ def _configure_asymmetric_env(trainer_rank: int) -> None:
     os.environ.setdefault("TORCH_DDP_HETERO_PARAM_SYNC", "1")
 
 
-def _all_gather_scalar(value: float, world_size: int, device: torch.device) -> list[float]:
-    local = torch.tensor([value], dtype=torch.float64, device=device)
-    gathered = [torch.zeros(1, dtype=torch.float64, device=device) for _ in range(world_size)]
+def _all_gather_scalar(value: float, world_size: int) -> list[float]:
+    # Use CPU tensors for cross-rank scalar gather in heterogeneous runs.
+    # Gloo collectives require the same tensor device type on every rank.
+    local = torch.tensor([value], dtype=torch.float64, device="cpu")
+    gathered = [torch.zeros(1, dtype=torch.float64, device="cpu") for _ in range(world_size)]
     dist.all_gather(gathered, local)
     return [float(t.item()) for t in gathered]
 
@@ -139,8 +141,10 @@ class RawMNISTDataset(torch.utils.data.Dataset):
     def __init__(self, images: np.ndarray, labels: np.ndarray) -> None:
         if images.shape[0] != labels.shape[0]:
             raise RuntimeError("MNIST images/labels length mismatch")
-        self.images = torch.from_numpy(images).to(torch.float32).div_(255.0).unsqueeze(1)
-        self.labels = torch.from_numpy(labels.astype(np.int64))
+        # Copy arrays to ensure writable contiguous memory and avoid
+        # torch.from_numpy() non-writable tensor warnings.
+        self.images = torch.from_numpy(images.copy()).to(torch.float32).div_(255.0).unsqueeze(1)
+        self.labels = torch.from_numpy(labels.astype(np.int64, copy=True))
         # Match the common MNIST normalization used by torchvision examples.
         self.images.sub_(0.1307).div_(0.3081)
 
@@ -295,7 +299,7 @@ def main() -> None:
             loss = torch.nn.functional.cross_entropy(logits, y)
 
             # Compare same-batch same-model pre-step loss across ranks.
-            loss_values = _all_gather_scalar(float(loss.item()), args.world_size, device)
+            loss_values = _all_gather_scalar(float(loss.item()), args.world_size)
             loss_gap = max(loss_values) - min(loss_values)
             if loss_gap > args.tol_loss:
                 raise RuntimeError(
@@ -307,7 +311,7 @@ def main() -> None:
             ddp.trainer_step(optimizer if is_trainer else None)
 
             if step % max(1, args.log_interval) == 0:
-                param_values = _all_gather_scalar(_param_checksum(ddp.module), args.world_size, device)
+                param_values = _all_gather_scalar(_param_checksum(ddp.module), args.world_size)
                 param_gap = max(param_values) - min(param_values)
                 if param_gap > args.tol_param:
                     raise RuntimeError(
@@ -323,8 +327,8 @@ def main() -> None:
 
             if (step > 0) and (step % max(1, args.eval_interval) == 0):
                 eval_loss, eval_acc = evaluate(ddp.module, eval_loader, device)
-                eval_loss_values = _all_gather_scalar(eval_loss, args.world_size, device)
-                eval_acc_values = _all_gather_scalar(eval_acc, args.world_size, device)
+                eval_loss_values = _all_gather_scalar(eval_loss, args.world_size)
+                eval_acc_values = _all_gather_scalar(eval_acc, args.world_size)
                 if rank == 0:
                     print(
                         f"[eval step={step}] loss_pair={eval_loss_values} acc_pair={eval_acc_values}",
@@ -350,8 +354,8 @@ def main() -> None:
             break
 
     final_loss, final_acc = evaluate(ddp.module, eval_loader, device)
-    final_loss_values = _all_gather_scalar(final_loss, args.world_size, device)
-    final_acc_values = _all_gather_scalar(final_acc, args.world_size, device)
+    final_loss_values = _all_gather_scalar(final_loss, args.world_size)
+    final_acc_values = _all_gather_scalar(final_acc, args.world_size)
 
     if rank == 0:
         print(
