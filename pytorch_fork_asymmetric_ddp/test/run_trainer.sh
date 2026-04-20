@@ -8,7 +8,8 @@ export MASTER_ADDR="${MASTER_ADDR:-10.60.82.27}"
 export MASTER_PORT="${MASTER_PORT:-29621}"
 export WORLD_SIZE="${WORLD_SIZE:-2}"
 export RANK="${RANK:-0}"
-export STEPS="${STEPS:-20}"
+export STEPS="${STEPS:-1000}"
+export LOG_INTERVAL="${LOG_INTERVAL:-100}"
 
 export TORCH_DISTRIBUTED_DEBUG="${TORCH_DISTRIBUTED_DEBUG:-DETAIL}"
 export TORCH_DDP_ASYMMETRIC_MODE="${TORCH_DDP_ASYMMETRIC_MODE:-1}"
@@ -37,7 +38,7 @@ if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
 fi
 export GLOO_SOCKET_IFNAME
 
-echo "[trainer] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT WORLD_SIZE=$WORLD_SIZE RANK=$RANK IFACE=$GLOO_SOCKET_IFNAME STEPS=$STEPS"
+echo "[trainer] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT WORLD_SIZE=$WORLD_SIZE RANK=$RANK IFACE=$GLOO_SOCKET_IFNAME STEPS=$STEPS LOG_INTERVAL=$LOG_INTERVAL"
 
 python3 ddp_hetero_role.py \
   --rank "$RANK" \
@@ -45,4 +46,5 @@ python3 ddp_hetero_role.py \
   --master-addr "$MASTER_ADDR" \
   --master-port "$MASTER_PORT" \
   --world-size "$WORLD_SIZE" \
-  --steps "$STEPS"
+  --steps "$STEPS" \
+  --log-interval "$LOG_INTERVAL"

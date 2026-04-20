@@ -12,13 +12,13 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel as DDP
 
 def _configure_asymmetric_env(trainer_rank: int) -> None:
-    os.environ["TORCH_DDP_ASYMMETRIC_MODE"] = "1"
-    os.environ["TORCH_DDP_TRAINER_RANK"] = str(trainer_rank)
-    os.environ["TORCH_DDP_SKIP_ALLREDUCE"] = "1"
-    os.environ["TORCH_DDP_NON_TRAINER_FORWARD_ONLY"] = "1"
-    os.environ["TORCH_DDP_NON_TRAINER_BACKWARD"] = "allow"
-    os.environ["TORCH_DDP_SYNC_INTERVAL"] = "1"
-    os.environ["TORCH_DDP_HETERO_PARAM_SYNC"] = "1"
+    os.environ.setdefault("TORCH_DDP_ASYMMETRIC_MODE", "1")
+    os.environ.setdefault("TORCH_DDP_TRAINER_RANK", str(trainer_rank))
+    os.environ.setdefault("TORCH_DDP_SKIP_ALLREDUCE", "1")
+    os.environ.setdefault("TORCH_DDP_NON_TRAINER_FORWARD_ONLY", "1")
+    os.environ.setdefault("TORCH_DDP_NON_TRAINER_BACKWARD", "error")
+    os.environ.setdefault("TORCH_DDP_SYNC_INTERVAL", "1")
+    os.environ.setdefault("TORCH_DDP_HETERO_PARAM_SYNC", "1")
 
 
 def run_hetero_role(
@@ -51,8 +51,19 @@ def run_hetero_role(
             raise RuntimeError("Trainer rank requires CUDA, but torch.cuda.is_available()=False")
         device = torch.device("cuda:0")
         torch.cuda.set_device(device)
+        print(
+            f"[rank{rank}] gpu_check cuda_available={torch.cuda.is_available()} "
+            f"device_count={torch.cuda.device_count()} current_device={torch.cuda.current_device()}",
+            flush=True,
+        )
     else:
         device = torch.device("cpu")
+        print(
+            f"[rank{rank}] gpu_check cuda_available={torch.cuda.is_available()} "
+            f"device_count={torch.cuda.device_count()} "
+            f"cuda_visible_devices={os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')}",
+            flush=True,
+        )
 
     # Keep init deterministic so both ranks start from identical parameters.
     torch.manual_seed(2026)
@@ -80,6 +91,10 @@ def run_hetero_role(
     ckpt_dir = Path(save_dir) if save_every_steps > 0 else None
     if ckpt_dir is not None and (not is_trainer):
         ckpt_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[rank{rank}] checkpoint_dir={ckpt_dir} save_every_steps={save_every_steps}",
+            flush=True,
+        )
 
     step = 0
     while step < steps:
@@ -131,6 +146,13 @@ def run_hetero_role(
         print(
             f"Hetero asymmetric DDP demo: PASS "
             f"(steps={step}, elapsed={time.time() - start:.1f}s)",
+            flush=True,
+        )
+    elif ckpt_dir is not None:
+        saved = sorted(ckpt_dir.glob("follower_step_*.pt"))
+        print(
+            f"[rank{rank}] checkpoint_summary saved_files={len(saved)} "
+            f"latest={(saved[-1] if saved else 'none')}",
             flush=True,
         )
     dist.destroy_process_group()
