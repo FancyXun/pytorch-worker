@@ -212,10 +212,11 @@ def main() -> None:
         ckpt_dir.mkdir(parents=True, exist_ok=True)
         print(f"[rank{rank}] checkpoint_dir={ckpt_dir}", flush=True)
 
-    t0 = time.time()
+    t_run0 = time.perf_counter()
     global_step = 0
 
     for epoch in range(epochs):
+        t_ep0 = time.perf_counter()
         ddp.train()
         losses: list[float] = []
         for batch_idx, (x_batch, y_batch) in enumerate(train_dl):
@@ -243,9 +244,10 @@ def main() -> None:
             global_step += 1
 
         epoch_mse = sum(losses) / max(1, len(losses))
+        epoch_sec = time.perf_counter() - t_ep0
         print(
-            f"metric rank={rank} epoch_end={epoch} epoch_mse={epoch_mse:.6f} "
-            f"elapsed_s={time.time() - t0:.1f}",
+            f"[bench] run=hetero rank={rank} device={device} epoch={epoch + 1}/{epochs} "
+            f"epoch_mse={epoch_mse:.6f} epoch_sec={epoch_sec:.3f}",
             flush=True,
         )
 
@@ -262,7 +264,11 @@ def main() -> None:
             )
             print(f"[rank{rank}] checkpoint_saved={ckpt_path}", flush=True)
 
-    print(f"[rank{rank}] stgnn_hetero_done epochs={epochs} elapsed_s={time.time() - t0:.1f}", flush=True)
+    print(
+        f"[bench] run=hetero rank={rank} device={device} train_done epochs={epochs} "
+        f"total_sec={time.perf_counter() - t_run0:.3f}",
+        flush=True,
+    )
     dist.destroy_process_group()
 
 

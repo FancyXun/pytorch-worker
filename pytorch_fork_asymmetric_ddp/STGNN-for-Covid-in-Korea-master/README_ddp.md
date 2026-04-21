@@ -40,3 +40,23 @@ EPOCHS=2 ./run_follower.sh
 | One device | Trainer CUDA, follower CPU |
 
 Install the **forked** PyTorch with asymmetric DDP on **both** processes before running.
+
+## Benchmarking (same config, compare wall time)
+
+Both scripts log one line per epoch with the same fields so you can `grep '[bench]'`:
+
+- **Local:** `python train.py` (optional `--epochs N` or `EPOCHS=N`). Uses `tests/configs/` like `ddp_train.py`.
+- **Hetero:** `EPOCHS=N ./run_trainer.sh` and matching follower. Each rank prints `epoch_sec` for that epoch (they should be similar because steps synchronize).
+
+Example:
+
+```bash
+# same epoch count
+EPOCHS=5 python train.py 2>&1 | tee local.log
+EPOCHS=5 ./run_trainer.sh 2>&1 | tee trainer.log   # plus follower in another terminal
+grep '\[bench\]' local.log trainer.log
+```
+
+### Why local CPU can look faster than GPU hetero
+
+Hetero training is **not** “GPU only”: every step still needs the **follower forward**, **Gloo** collectives, and **parameter sync** over the network. If the model and batch are small, that **communication and coordination** dominates; a single-process CPU run avoids all of that. Wall-clock `epoch_sec` reflects the **slowest path** (often sync-bound), not raw GPU FLOPs.

@@ -2,11 +2,16 @@ from __future__ import annotations
 
 """
 Normal local STGNN training (single process, local CUDA if available).
+
+Benchmark: each epoch prints `[bench] run=local ... epoch_sec=...` (same layout as ddp_train.py).
+Override epochs: `--epochs N` or env `EPOCHS=N` (else `stgnn_config.json`).
 """
 # pyright: reportMissingImports=false
 
+import argparse
 import os
 import sys
+import time
 
 import numpy as np
 import torch
@@ -74,9 +79,26 @@ def _expand_adj(adj_mx: np.ndarray, target_nodes: int) -> np.ndarray:
     return big[:target_nodes, :target_nodes]
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Local STGNN train (single process)")
+    p.add_argument("--epochs", type=int, default=None, help="Override stgnn_config.json epochs")
+    return p.parse_args()
+
+
 def main():
+    args = _parse_args()
     data_cfg, model_cfg = _load_cfg()
     device = torch.device("cuda", 0) if torch.cuda.is_available() else torch.device("cpu")
+
+    epochs = int(model_cfg["epochs"])
+    if args.epochs is not None:
+        epochs = int(args.epochs)
+    elif os.environ.get("EPOCHS"):
+        epochs = int(os.environ["EPOCHS"])
+
+    torch.manual_seed(2026)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(2026)
 
     df = load_province_temporal_data(
         provinces=data_cfg["provinces"], status=data_cfg["status"]
@@ -107,11 +129,13 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
     loss_fn = torch.nn.MSELoss()
     print(
-        f"[local train] device={device}, nodes={target_nodes}, train_samples={len(train_dl.dataset)}"
+        f"[local train] device={device}, nodes={target_nodes}, "
+        f"train_samples={len(train_dl.dataset)}, epochs={epochs}"
     )
 
-    epochs = int(model_cfg["epochs"])
+    t_run0 = time.perf_counter()
     for epoch in range(epochs):
+        t_ep0 = time.perf_counter()
         model.train()
         losses = []
         for x_batch, y_batch in train_dl:
@@ -124,7 +148,16 @@ def main():
             loss.backward()
             optimizer.step()
             losses.append(loss.item())
-        print(f"[local train] epoch={epoch + 1} loss={sum(losses) / len(losses):.6f}")
+        epoch_mse = sum(losses) / len(losses)
+        epoch_sec = time.perf_counter() - t_ep0
+        print(
+            f"[bench] run=local device={device} epoch={epoch + 1}/{epochs} "
+            f"epoch_mse={epoch_mse:.6f} epoch_sec={epoch_sec:.3f}"
+        )
+    print(
+        f"[bench] run=local device={device} train_done epochs={epochs} "
+        f"total_sec={time.perf_counter() - t_run0:.3f}"
+    )
 
 
 if __name__ == "__main__":
