@@ -4,6 +4,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+export LOG_FILE="${LOG_FILE:-}"
+if [[ -n "${LOG_FILE}" ]]; then
+  mkdir -p "$(dirname "${LOG_FILE}")"
+  exec > >(tee -a "${LOG_FILE}") 2>&1
+fi
+
 export MASTER_ADDR="${MASTER_ADDR:-10.60.82.27}"
 export MASTER_PORT="${MASTER_PORT:-29623}"
 export WORLD_SIZE="${WORLD_SIZE:-2}"
