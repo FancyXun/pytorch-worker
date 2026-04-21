@@ -22,14 +22,14 @@ export TORCH_DDP_NON_TRAINER_BACKWARD="${TORCH_DDP_NON_TRAINER_BACKWARD:-error}"
 export TORCH_DDP_SYNC_INTERVAL="${TORCH_DDP_SYNC_INTERVAL:-1}"
 export TORCH_DDP_HETERO_PARAM_SYNC="${TORCH_DDP_HETERO_PARAM_SYNC:-1}"
 
-if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
+if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]] && command -v ip >/dev/null 2>&1; then
   GLOO_SOCKET_IFNAME="$(
-    ip route get "$MASTER_ADDR" 2>/dev/null | awk '{for (i = 1; i <= NF; ++i) if ($i == "dev") {print $(i + 1); exit}}'
+    ip route get "$MASTER_ADDR" 2>/dev/null | awk '{for (i = 1; i <= NF; ++i) if ($i == "dev") {print $(i + 1); exit}}' || true
   )"
 fi
-
 if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
   GLOO_SOCKET_IFNAME="eth0"
+  echo "WARN: set GLOO_SOCKET_IFNAME explicitly if needed; defaulting to eth0 (no usable iproute2 or no route match)." >&2
 fi
 export GLOO_SOCKET_IFNAME
 
