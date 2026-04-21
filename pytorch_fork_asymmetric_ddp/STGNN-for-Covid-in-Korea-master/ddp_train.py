@@ -160,26 +160,21 @@ def main() -> None:
     os.environ["WORLD_SIZE"] = str(args.world_size)
     os.environ["RANK"] = str(args.rank)
 
-    is_store_master = args.rank == args.trainer_rank
+    is_store_master = args.rank == 0
     print(
         f"[rank{args.rank}] init_pg_start backend=gloo master={args.master_addr}:{args.master_port} "
         f"world_size={args.world_size} timeout_sec={args.init_timeout_sec} "
         f"is_store_master={is_store_master} iface={os.environ.get('GLOO_SOCKET_IFNAME', '<unset>')}",
         flush=True,
     )
-    store = dist.TCPStore(
-        host_name=args.master_addr,
-        port=args.master_port,
-        world_size=args.world_size,
-        is_master=is_store_master,
-        timeout=timedelta(seconds=args.init_timeout_sec),
-        wait_for_workers=True,
-    )
+    if args.rank != 0:
+        print(
+            "[init hint] rank0 must be running first for env:// rendezvous (TCPStore host).",
+            flush=True,
+        )
     dist.init_process_group(
         backend="gloo",
-        store=store,
-        rank=args.rank,
-        world_size=args.world_size,
+        init_method="env://",
         timeout=timedelta(seconds=args.init_timeout_sec),
     )
     print(f"[rank{args.rank}] init_pg_done", flush=True)
