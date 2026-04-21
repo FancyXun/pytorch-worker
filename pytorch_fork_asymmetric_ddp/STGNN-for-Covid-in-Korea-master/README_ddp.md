@@ -102,6 +102,25 @@ python3 analyze_bench_logs.py \
   --json-out logs/bench_report.json
 ```
 
+Generate documentation-ready plots:
+
+```bash
+python3 plot_bench_logs.py \
+  --local-gpu-log logs/local_gpu.log \
+  --local-cpu-log logs/local_cpu.log \
+  --hetero-trainer-log logs/hetero_trainer.log \
+  --hetero-follower-log logs/hetero_follower.log \
+  --warmup-epochs 1 \
+  --title-prefix "STGNN 100 epochs" \
+  --out-dir logs/plots
+```
+
+Output files:
+
+- `logs/plots/epoch_time_comparison.png`
+- `logs/plots/epoch_mse_comparison.png`
+- `logs/plots/mean_epoch_time_bar.png`
+
 ### Why local CPU can look faster than GPU hetero
 
 Hetero training is still not “GPU only”: each step must coordinate across ranks with **Gloo** and **parameter sync** over the network. Even with follower forward skipped, wall-clock `epoch_sec` is set by the slowest distributed path (sync + CPU/network overhead), not raw GPU FLOPs.
