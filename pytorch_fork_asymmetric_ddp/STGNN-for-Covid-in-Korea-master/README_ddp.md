@@ -9,8 +9,8 @@ This mirrors `train.py` (same configs under `tests/configs/`, same data and `STG
 
 Default role mapping in scripts:
 
-- `rank=1` is trainer (GPU)
-- `rank=0` is follower (CPU)
+- `rank=0` is trainer (GPU)
+- `rank=1` is follower (CPU)
 
 ## Files
 

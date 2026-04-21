@@ -3,8 +3,8 @@
 
 Mirrors train.py data/model setup; only the optimization loop is split.
 Default roles in this script are:
-  - rank 0: follower (CPU)
-  - rank 1: trainer (GPU)
+  - rank 0: trainer (GPU)
+  - rank 1: follower (CPU)
 
 Optimization loop:
   - trainer: forward + backward + ddp.trainer_step(optimizer)
@@ -113,8 +113,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--trainer-rank",
         type=int,
-        default=1,
-        help="Default trainer rank is 1 (rank0 follower, rank1 trainer).",
+        default=0,
+        help="Default trainer rank is 0 (rank0 trainer, rank1 follower).",
     )
     p.add_argument("--world-size", type=int, default=2)
     p.add_argument("--master-addr", default="127.0.0.1")
