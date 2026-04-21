@@ -283,9 +283,12 @@ def main() -> None:
                 loss_scalar = float(loss.item())
 
             ddp.trainer_step(optimizer if is_trainer else None)
+            # Keep follower metrics meaningful even when follower skips forward.
+            loss_scalar = ddp.sync_scalar_from_trainer(
+                loss_scalar if is_trainer else None
+            )
 
-            if not np.isnan(loss_scalar):
-                losses.append(loss_scalar)
+            losses.append(loss_scalar)
             if (
                 is_trainer
                 and args.log_interval > 0

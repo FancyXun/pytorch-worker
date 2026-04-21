@@ -1461,6 +1461,36 @@ class DistributedDataParallel(Module, Joinable):
                 else:
                     b.data.copy_(cpu_tensor.to(device=b.data.device, dtype=b.data.dtype))
 
+    def sync_scalar_from_trainer(self, value=None):
+        """
+        Broadcast a scalar value from trainer rank to all ranks.
+
+        Typical asymmetric usage:
+          - trainer rank passes its local scalar (e.g. loss.item())
+          - follower ranks pass None and receive trainer's scalar
+        """
+        if not getattr(self, "_ddp_asymmetric_mode", False):
+            if value is None:
+                raise RuntimeError("sync_scalar_from_trainer requires scalar on non-asymmetric mode")
+            return float(value)
+
+        trainer_rank = getattr(self, "_ddp_trainer_rank", -1)
+        if trainer_rank < 0:
+            raise RuntimeError(
+                "sync_scalar_from_trainer requires TORCH_DDP_TRAINER_RANK to be set"
+            )
+
+        current_rank = dist.get_rank(self.process_group)
+        if current_rank == trainer_rank:
+            if value is None:
+                raise RuntimeError("trainer rank must provide scalar value")
+            cpu_tensor = torch.tensor([float(value)], dtype=torch.float64, device="cpu")
+        else:
+            cpu_tensor = torch.zeros(1, dtype=torch.float64, device="cpu")
+
+        dist.broadcast(cpu_tensor, src=trainer_rank, group=self.process_group)
+        return float(cpu_tensor.item())
+
     def trainer_step(self, optimizer):
         """
         Unified asymmetric step helper.
