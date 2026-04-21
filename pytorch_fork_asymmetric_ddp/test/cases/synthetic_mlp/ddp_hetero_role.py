@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Unified role entry for heterogeneous asymmetric DDP demo.
 
-Usage:
+Usage (from this directory: test/cases/synthetic_mlp):
   # GPU trainer (rank=0)
-  python ddp_hetero_role.py --rank 0 --master-addr 10.60.82.27 --master-port 29621 --steps 3
+  python3 ddp_hetero_role.py --rank 0 --master-addr 10.60.82.27 --master-port 29621 --steps 3
 
   # CPU follower (rank=1)
-  python ddp_hetero_role.py --rank 1 --master-addr 10.60.82.27 --master-port 29621 --steps 3
+  python3 ddp_hetero_role.py --rank 1 --master-addr 10.60.82.27 --master-port 29621 --steps 3
 """
 
 from __future__ import annotations

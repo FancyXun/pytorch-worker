@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 export MASTER_ADDR="${MASTER_ADDR:-10.60.82.27}"
-export MASTER_PORT="${MASTER_PORT:-29641}"
+export MASTER_PORT="${MASTER_PORT:-29621}"
 export WORLD_SIZE="${WORLD_SIZE:-2}"
 export RANK="${RANK:-0}"
 
@@ -32,7 +32,7 @@ if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
 fi
 export GLOO_SOCKET_IFNAME
 
-echo "[mnist-trainer] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT RANK=$RANK IFACE=$GLOO_SOCKET_IFNAME MAX_STEPS=$MAX_STEPS"
+echo "[mnist/trainer] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT RANK=$RANK IFACE=$GLOO_SOCKET_IFNAME MAX_STEPS=$MAX_STEPS"
 
 python3 ddp_hetero_mnist.py \
   --rank "$RANK" \

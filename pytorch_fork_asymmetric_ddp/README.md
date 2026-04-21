@@ -90,6 +90,17 @@ Enable and tune via environment variables (see the top of `distributed.py` in th
 
 ---
 
+## Runnable hetero demos (`test/`)
+
+Two independent examples live under **`test/cases/`**:
+
+- **`test/cases/synthetic_mlp/`** — minimal MLP + MSE (`ddp_hetero_common.py` + `ddp_hetero_role.py`).
+- **`test/cases/mnist/`** — MNIST + metrics logging (`ddp_hetero_mnist.py` only).
+
+See **`test/README.md`** for a table and per-case READMEs for what customers must change.
+
+---
+
 ## Example model repo (local baseline)
 
 [`STGNN-for-Covid-in-Korea-master/`](STGNN-for-Covid-in-Korea-master/) holds a sample STGNN project used for local CPU training experiments (`train.py`). It does **not** depend on this fork until you install the modified PyTorch and write a multi-process / multi-rank script that uses `DistributedDataParallel` with the env vars above.
