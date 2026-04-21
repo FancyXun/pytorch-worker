@@ -103,11 +103,16 @@ class SmallCNN(torch.nn.Module):
         return self.net(x)
 
 
-def _download(url: str, path: Path) -> None:
+def _download(url: str, path: Path, *, rank: int) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    abs_path = path.resolve()
     if path.exists():
+        print(f"[rank{rank}] mnist local_file ok path={abs_path}", flush=True)
         return
+    print(f"[rank{rank}] mnist downloading url={url}", flush=True)
+    print(f"[rank{rank}] mnist saving_to path={abs_path}", flush=True)
     urllib.request.urlretrieve(url, path)  # nosec B310
+    print(f"[rank{rank}] mnist download_done path={abs_path}", flush=True)
 
 
 def _read_idx_images(path: Path) -> np.ndarray:
@@ -145,26 +150,49 @@ class RawMNISTDataset(torch.utils.data.Dataset):
         return self.images[idx], self.labels[idx]
 
 
-def build_mnist_datasets(data_dir: Path) -> tuple[torch.utils.data.Dataset, torch.utils.data.Dataset]:
-    data_dir.mkdir(parents=True, exist_ok=True)
+def build_mnist_datasets(
+    data_dir: Path, *, rank: int
+) -> tuple[torch.utils.data.Dataset, torch.utils.data.Dataset]:
+    root = data_dir.expanduser().resolve()
+    root.mkdir(parents=True, exist_ok=True)
     if HAS_TORCHVISION:
+        print(
+            f"[rank{rank}] mnist data_root={root} backend=torchvision "
+            f"(MNIST files under {root / 'MNIST'}; same root on every rank)",
+            flush=True,
+        )
         transform = transforms.Compose(
             [
                 transforms.ToTensor(),
                 transforms.Normalize((0.1307,), (0.3081,)),
             ]
         )
-        train_set = datasets.MNIST(root=str(data_dir), train=True, download=True, transform=transform)
-        test_set = datasets.MNIST(root=str(data_dir), train=False, download=True, transform=transform)
+        train_set = datasets.MNIST(root=str(root), train=True, download=True, transform=transform)
+        test_set = datasets.MNIST(root=str(root), train=False, download=True, transform=transform)
+        print(
+            f"[rank{rank}] mnist ready train_samples={len(train_set)} test_samples={len(test_set)} "
+            f"starting_training_from_disk",
+            flush=True,
+        )
         return train_set, test_set
 
+    print(
+        f"[rank{rank}] mnist data_root={root} backend=raw_idx "
+        f"(files: {', '.join(MNIST_FILES.values())}; same root on every rank)",
+        flush=True,
+    )
     for fname in MNIST_FILES.values():
-        _download(f"{MNIST_BASE_URL}{fname}", data_dir / fname)
+        _download(f"{MNIST_BASE_URL}{fname}", root / fname, rank=rank)
 
-    train_images = _read_idx_images(data_dir / MNIST_FILES["train_images"])
-    train_labels = _read_idx_labels(data_dir / MNIST_FILES["train_labels"])
-    test_images = _read_idx_images(data_dir / MNIST_FILES["test_images"])
-    test_labels = _read_idx_labels(data_dir / MNIST_FILES["test_labels"])
+    train_images = _read_idx_images(root / MNIST_FILES["train_images"])
+    train_labels = _read_idx_labels(root / MNIST_FILES["train_labels"])
+    test_images = _read_idx_images(root / MNIST_FILES["test_images"])
+    test_labels = _read_idx_labels(root / MNIST_FILES["test_labels"])
+    print(
+        f"[rank{rank}] mnist raw_idx loaded train_samples={train_images.shape[0]} "
+        f"test_samples={test_images.shape[0]} starting_training",
+        flush=True,
+    )
     return RawMNISTDataset(train_images, train_labels), RawMNISTDataset(test_images, test_labels)
 
 
@@ -234,7 +262,7 @@ def main() -> None:
             f"reason={TORCHVISION_IMPORT_ERROR!r}",
             flush=True,
         )
-    train_set, test_set = build_mnist_datasets(data_dir)
+    train_set, test_set = build_mnist_datasets(data_dir, rank=rank)
 
     train_loader = torch.utils.data.DataLoader(
         train_set,
