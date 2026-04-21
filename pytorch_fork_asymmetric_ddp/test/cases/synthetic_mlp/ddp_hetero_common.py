@@ -98,8 +98,11 @@ def run_hetero_role(
 
     step = 0
     while step < steps:
-        x = torch.randn(batch_size, in_dim, device=device)
-        y = torch.randn(batch_size, out_dim, device=device)
+        # Identical inputs on every rank: generate on CPU with a per-step seed, then move
+        # to device (avoids CPU/GPU RNG divergence). Same idea as a replicated dataloader.
+        torch.manual_seed(2026 + step)
+        x = torch.randn(batch_size, in_dim).to(device)
+        y = torch.randn(batch_size, out_dim).to(device)
 
         if is_trainer:
             optimizer.zero_grad(set_to_none=True)
@@ -139,7 +142,6 @@ def run_hetero_role(
             )
             print(f"[rank{rank}] checkpoint_saved={ckpt_path}", flush=True)
 
-        dist.barrier()
         step += 1
 
     if rank == trainer_rank:

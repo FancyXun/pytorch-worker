@@ -2,7 +2,9 @@
 """Asymmetric DDP MNIST demo: minimal customer-facing loop.
 
 Trainer (GPU) and follower (CPU) each print the same metrics locally so you can
-diff logs by hand. No cross-rank all_gather or automatic correctness asserts.
+diff logs by hand. Same as typical multi-process training: each rank builds the
+same Dataset/DataLoader (shuffle=False, fixed seed) and steps the loader in lockstep—
+no per-batch broadcast. Synchronization relies on collectives inside trainer_step().
 
 Metrics (MNIST classification example):
   - train_loss: batch cross-entropy (analogous spot to plug in MSE for regression)
@@ -270,18 +272,10 @@ def main() -> None:
             if step >= args.max_steps:
                 break
 
-            if is_trainer:
-                batch_x = x_cpu.contiguous()
-                batch_y = y_cpu.contiguous()
-            else:
-                batch_x = torch.zeros(args.batch_size, 1, 28, 28, dtype=torch.float32)
-                batch_y = torch.zeros(args.batch_size, dtype=torch.int64)
-
-            dist.broadcast(batch_x, src=args.trainer_rank)
-            dist.broadcast(batch_y, src=args.trainer_rank)
-
-            x = batch_x.to(device, non_blocking=True)
-            y = batch_y.to(device, non_blocking=True)
+            # Same pattern as native DDP: every rank runs the same DataLoader order
+            # (shuffle=False). No broadcast of batches.
+            x = x_cpu.to(device, non_blocking=True)
+            y = y_cpu.to(device, non_blocking=True)
 
             if is_trainer:
                 optimizer.zero_grad(set_to_none=True)
@@ -315,7 +309,6 @@ def main() -> None:
                 )
                 print(f"[rank{rank}] checkpoint_saved={ckpt_path}", flush=True)
 
-            dist.barrier()
             step += 1
 
         if step >= args.max_steps:
