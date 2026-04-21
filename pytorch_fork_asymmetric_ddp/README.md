@@ -96,6 +96,7 @@ Two independent examples live under **`test/cases/`**:
 
 - **`test/cases/synthetic_mlp/`** — minimal MLP + MSE (`ddp_hetero_common.py` + `ddp_hetero_role.py`).
 - **`test/cases/mnist/`** — MNIST + metrics logging (`ddp_hetero_mnist.py` only).
+- **`STGNN-for-Covid-in-Korea-master/`** — real STGNN project: `ddp_train.py` + `run_trainer.sh` / `run_follower.sh` (see **`README_ddp.md`** there).
 
 See **`test/README.md`** for a table and per-case READMEs for what customers must change.
 
