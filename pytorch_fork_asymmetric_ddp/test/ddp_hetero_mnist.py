@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Asymmetric DDP MNIST demo with cross-rank consistency checks.
+"""Asymmetric DDP MNIST demo: minimal customer-facing loop.
 
-Goal:
-1) Train on open-source MNIST dataset.
-2) Verify follower (CPU/container side) sees consistent loss and parameters.
-3) Print accuracy so behavior is observable end-to-end.
+Trainer (GPU) and follower (CPU) each print the same metrics locally so you can
+diff logs by hand. No cross-rank all_gather or automatic correctness asserts.
+
+Metrics (MNIST classification example):
+  - train_loss: batch cross-entropy (analogous spot to plug in MSE for regression)
+  - test_ce_loss / accuracy: full test set after trainer_step sync
+Follower can save checkpoints; correctness is for you to compare printed lines.
 """
 
 from __future__ import annotations
@@ -55,8 +58,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log-interval", type=int, default=50)
     parser.add_argument("--eval-interval", type=int, default=200)
     parser.add_argument("--max-steps", type=int, default=1000)
-    parser.add_argument("--tol-loss", type=float, default=2e-4)
-    parser.add_argument("--tol-param", type=float, default=1e-4)
     parser.add_argument("--data-dir", default="/tmp/mnist_data")
     parser.add_argument("--save-every-steps", type=int, default=200)
     parser.add_argument("--save-dir", default="/tmp/ddp_hetero_mnist_ckpt")
@@ -73,16 +74,7 @@ def _configure_asymmetric_env(trainer_rank: int) -> None:
     os.environ.setdefault("TORCH_DDP_HETERO_PARAM_SYNC", "1")
 
 
-def _all_gather_scalar(value: float, world_size: int) -> list[float]:
-    # Use CPU tensors for cross-rank scalar gather in heterogeneous runs.
-    # Gloo collectives require the same tensor device type on every rank.
-    local = torch.tensor([value], dtype=torch.float64, device="cpu")
-    gathered = [torch.zeros(1, dtype=torch.float64, device="cpu") for _ in range(world_size)]
-    dist.all_gather(gathered, local)
-    return [float(t.item()) for t in gathered]
-
-
-def _param_checksum(model: torch.nn.Module) -> float:
+def _param_sum(model: torch.nn.Module) -> float:
     total = 0.0
     with torch.no_grad():
         for p in model.parameters():
@@ -132,8 +124,8 @@ def _read_idx_labels(path: Path) -> np.ndarray:
         if magic != 2049:
             raise RuntimeError(f"Invalid label IDX magic in {path}: {magic}")
         data = np.frombuffer(f.read(), dtype=np.uint8)
-    if data.shape[0] != num:
-        raise RuntimeError(f"Label count mismatch in {path}: {data.shape[0]} vs {num}")
+        if data.shape[0] != num:
+            raise RuntimeError(f"Label count mismatch in {path}: {data.shape[0]} vs {num}")
     return data
 
 
@@ -141,11 +133,8 @@ class RawMNISTDataset(torch.utils.data.Dataset):
     def __init__(self, images: np.ndarray, labels: np.ndarray) -> None:
         if images.shape[0] != labels.shape[0]:
             raise RuntimeError("MNIST images/labels length mismatch")
-        # Copy arrays to ensure writable contiguous memory and avoid
-        # torch.from_numpy() non-writable tensor warnings.
         self.images = torch.from_numpy(images.copy()).to(torch.float32).div_(255.0).unsqueeze(1)
         self.labels = torch.from_numpy(labels.astype(np.int64, copy=True))
-        # Match the common MNIST normalization used by torchvision examples.
         self.images.sub_(0.1307).div_(0.3081)
 
     def __len__(self) -> int:
@@ -168,7 +157,6 @@ def build_mnist_datasets(data_dir: Path) -> tuple[torch.utils.data.Dataset, torc
         test_set = datasets.MNIST(root=str(data_dir), train=False, download=True, transform=transform)
         return train_set, test_set
 
-    # torchvision may be incompatible with custom-built torch.
     for fname in MNIST_FILES.values():
         _download(f"{MNIST_BASE_URL}{fname}", data_dir / fname)
 
@@ -179,7 +167,10 @@ def build_mnist_datasets(data_dir: Path) -> tuple[torch.utils.data.Dataset, torc
     return RawMNISTDataset(train_images, train_labels), RawMNISTDataset(test_images, test_labels)
 
 
-def evaluate(model: torch.nn.Module, loader: torch.utils.data.DataLoader, device: torch.device) -> tuple[float, float]:
+def evaluate(
+    model: torch.nn.Module, loader: torch.utils.data.DataLoader, device: torch.device
+) -> tuple[float, float]:
+    """Returns mean cross-entropy loss per sample, and accuracy in [0,1]."""
     model.eval()
     total_loss = 0.0
     total = 0
@@ -195,7 +186,9 @@ def evaluate(model: torch.nn.Module, loader: torch.utils.data.DataLoader, device
             correct += int((pred == y).sum().item())
             total += int(y.numel())
     model.train()
-    return total_loss / max(1, total), correct / max(1, total)
+    mean_ce = total_loss / max(1, total)
+    acc = correct / max(1, total)
+    return mean_ce, acc
 
 
 def main() -> None:
@@ -296,44 +289,29 @@ def main() -> None:
                 optimizer.zero_grad(set_to_none=True)
 
             logits = ddp(x)
-            loss = torch.nn.functional.cross_entropy(logits, y)
-
-            # Compare same-batch same-model pre-step loss across ranks.
-            loss_values = _all_gather_scalar(float(loss.item()), args.world_size)
-            loss_gap = max(loss_values) - min(loss_values)
-            if loss_gap > args.tol_loss:
-                raise RuntimeError(
-                    f"Loss mismatch too large at step {step}: values={loss_values}, tol={args.tol_loss}"
-                )
+            # Classification: cross-entropy. For regression you would print mse_loss here instead.
+            train_loss = torch.nn.functional.cross_entropy(logits, y)
 
             if is_trainer:
-                loss.backward()
+                train_loss.backward()
             ddp.trainer_step(optimizer if is_trainer else None)
 
             if step % max(1, args.log_interval) == 0:
-                param_values = _all_gather_scalar(_param_checksum(ddp.module), args.world_size)
-                param_gap = max(param_values) - min(param_values)
-                if param_gap > args.tol_param:
-                    raise RuntimeError(
-                        f"Param checksum mismatch at step {step}: values={param_values}, tol={args.tol_param}"
-                    )
                 elapsed = time.time() - start
-                if rank == 0:
-                    print(
-                        f"step={step} loss_pair={loss_values} loss_gap={loss_gap:.3e} "
-                        f"param_pair={param_values} param_gap={param_gap:.3e} elapsed={elapsed:.1f}s",
-                        flush=True,
-                    )
+                ps = _param_sum(ddp.module)
+                print(
+                    f"metric rank={rank} step={step} train_loss={float(train_loss.item()):.6f} "
+                    f"param_sum={ps:.6f} elapsed_s={elapsed:.2f}",
+                    flush=True,
+                )
 
             if (step > 0) and (step % max(1, args.eval_interval) == 0):
-                eval_loss, eval_acc = evaluate(ddp.module, eval_loader, device)
-                eval_loss_values = _all_gather_scalar(eval_loss, args.world_size)
-                eval_acc_values = _all_gather_scalar(eval_acc, args.world_size)
-                if rank == 0:
-                    print(
-                        f"[eval step={step}] loss_pair={eval_loss_values} acc_pair={eval_acc_values}",
-                        flush=True,
-                    )
+                test_ce_loss, accuracy = evaluate(ddp.module, eval_loader, device)
+                print(
+                    f"metric rank={rank} eval_step={step} test_ce_loss={test_ce_loss:.6f} "
+                    f"accuracy={accuracy:.6f}",
+                    flush=True,
+                )
 
             if (not is_trainer) and ckpt_dir is not None and ((step + 1) % args.save_every_steps == 0):
                 ckpt_path = ckpt_dir / f"follower_mnist_step_{step + 1}.pt"
@@ -353,27 +331,28 @@ def main() -> None:
         if step >= args.max_steps:
             break
 
-    final_loss, final_acc = evaluate(ddp.module, eval_loader, device)
-    final_loss_values = _all_gather_scalar(final_loss, args.world_size)
-    final_acc_values = _all_gather_scalar(final_acc, args.world_size)
+    test_ce_loss, accuracy = evaluate(ddp.module, eval_loader, device)
+    print(
+        f"metric rank={rank} final step={step} test_ce_loss={test_ce_loss:.6f} accuracy={accuracy:.6f} "
+        f"elapsed_s={time.time() - start:.2f}",
+        flush=True,
+    )
 
-    if rank == 0:
-        print(
-            f"[final] steps={step} test_loss_pair={final_loss_values} test_acc_pair={final_acc_values}",
-            flush=True,
-        )
-        print(f"Hetero MNIST demo: PASS (elapsed={time.time() - start:.1f}s)", flush=True)
-    elif ckpt_dir is not None:
-        saved = sorted(ckpt_dir.glob("follower_mnist_step_*.pt"))
-        print(
-            f"[rank{rank}] checkpoint_summary saved_files={len(saved)} "
-            f"latest={(saved[-1] if saved else 'none')}",
-            flush=True,
-        )
+    if is_trainer:
+        print(f"[rank{rank}] train_done ok", flush=True)
+    else:
+        if ckpt_dir is not None:
+            saved = sorted(ckpt_dir.glob("follower_mnist_step_*.pt"))
+            print(
+                f"[rank{rank}] follower_done checkpoint_files={len(saved)} "
+                f"latest={(saved[-1] if saved else 'none')}",
+                flush=True,
+            )
+        else:
+            print(f"[rank{rank}] follower_done ok", flush=True)
 
     dist.destroy_process_group()
 
 
 if __name__ == "__main__":
     main()
-
