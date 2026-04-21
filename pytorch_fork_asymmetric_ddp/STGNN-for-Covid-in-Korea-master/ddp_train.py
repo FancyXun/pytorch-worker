@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """Heterogeneous asymmetric DDP training for STGNN (GPU trainer + CPU follower).
 
-Mirrors train.py data/model setup; only the optimization loop is split:
-  - trainer: backward + optimizer passed into ddp.trainer_step(optimizer)
-  - follower: ddp.trainer_step(None)
+Mirrors train.py data/model setup; only the optimization loop is split.
+Default roles in this script are:
+  - rank 0: follower (CPU)
+  - rank 1: trainer (GPU)
+
+Optimization loop:
+  - trainer: forward + backward + ddp.trainer_step(optimizer)
+  - follower: ddp.trainer_step(None), and can skip forward for speed experiments
 
 Requires the team's forked PyTorch with asymmetric DDP (TORCH_DDP_* env vars).
 Each rank loads the same DataLoader order (shuffle=False) like native multi-process training.
@@ -103,8 +108,13 @@ def _param_sum(model: torch.nn.Module) -> float:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="STGNN hetero asymmetric DDP")
-    p.add_argument("--rank", type=int, required=True, choices=(0, 1))
-    p.add_argument("--trainer-rank", type=int, default=0, choices=(0, 1))
+    p.add_argument("--rank", type=int, required=True)
+    p.add_argument(
+        "--trainer-rank",
+        type=int,
+        default=1,
+        help="Default trainer rank is 1 (rank0 follower, rank1 trainer).",
+    )
     p.add_argument("--world-size", type=int, default=2)
     p.add_argument("--master-addr", default="127.0.0.1")
     p.add_argument("--master-port", type=int, default=29623)
@@ -122,6 +132,15 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--save-every-epochs", type=int, default=0)
     p.add_argument("--save-dir", default="/tmp/stgnn_hetero_ckpt")
+    p.add_argument(
+        "--skip-follower-forward",
+        action="store_true",
+        default=(os.environ.get("SKIP_FOLLOWER_FORWARD", "1") == "1"),
+        help=(
+            "If set, follower rank skips ddp forward and only participates in "
+            "trainer_step() sync. Default enabled via SKIP_FOLLOWER_FORWARD=1."
+        ),
+    )
     return p.parse_args()
 
 
@@ -136,9 +155,8 @@ def main() -> None:
 
     dist.init_process_group(backend="gloo", init_method="env://")
     rank = args.rank
-    is_trainer = rank == args.trainer_rank
 
-    if is_trainer:
+    if rank == args.trainer_rank:
         if not torch.cuda.is_available():
             raise RuntimeError("Trainer rank requires CUDA.")
         device = torch.device("cuda:0")
@@ -193,16 +211,19 @@ def main() -> None:
     ).to(device)
 
     if device.type == "cuda":
-        ddp = DDP(model, device_ids=[0], output_device=0)
+        ddp = DDP(model, device_ids=[0], output_device=0, broadcast_buffers=False)
     else:
-        ddp = DDP(model)
+        ddp = DDP(model, broadcast_buffers=False)
 
+    is_trainer = ddp.is_trainer_rank()
     optimizer = torch.optim.Adam(ddp.parameters(), lr=0.001) if is_trainer else None
     loss_fn = torch.nn.MSELoss()
 
     print(
         f"[rank{rank}] stgnn_hetero device={device} nodes={target_nodes} "
-        f"batches_per_epoch={len(train_dl)} epochs={epochs} cfg={ddp.get_asymmetric_mode_config()}",
+        f"batches_per_epoch={len(train_dl)} epochs={epochs} "
+        f"skip_follower_forward={args.skip_follower_forward} "
+        f"cfg={ddp.get_asymmetric_mode_config()}",
         flush=True,
     )
     dist.barrier()
@@ -225,25 +246,35 @@ def main() -> None:
 
             if is_trainer:
                 optimizer.zero_grad(set_to_none=True)
-
-            y_pred = ddp(x_batch, adj)
-            loss = loss_fn(y_pred, y_batch)
-
-            if is_trainer:
+                y_pred = ddp(x_batch, adj)
+                loss = loss_fn(y_pred, y_batch)
                 loss.backward()
+                loss_scalar = float(loss.item())
+            elif args.skip_follower_forward:
+                # Follower participates in parameter sync only; no local forward.
+                loss_scalar = float("nan")
+            else:
+                y_pred = ddp(x_batch, adj)
+                loss = loss_fn(y_pred, y_batch)
+                loss_scalar = float(loss.item())
 
             ddp.trainer_step(optimizer if is_trainer else None)
 
-            losses.append(float(loss.item()))
-            if args.log_interval > 0 and (batch_idx % args.log_interval == 0):
+            if not np.isnan(loss_scalar):
+                losses.append(loss_scalar)
+            if (
+                is_trainer
+                and args.log_interval > 0
+                and (batch_idx % args.log_interval == 0)
+            ):
                 print(
                     f"metric rank={rank} epoch={epoch} batch={batch_idx} step={global_step} "
-                    f"train_mse={float(loss.item()):.6f} param_sum={_param_sum(ddp.module):.4f}",
+                    f"train_mse={loss_scalar:.6f} param_sum={_param_sum(ddp.module):.4f}",
                     flush=True,
                 )
             global_step += 1
 
-        epoch_mse = sum(losses) / max(1, len(losses))
+        epoch_mse = (sum(losses) / len(losses)) if losses else float("nan")
         epoch_sec = time.perf_counter() - t_ep0
         print(
             f"[bench] run=hetero rank={rank} device={device} epoch={epoch + 1}/{epochs} "

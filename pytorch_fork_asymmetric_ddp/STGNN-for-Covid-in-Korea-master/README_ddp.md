@@ -7,6 +7,11 @@ This mirrors `train.py` (same configs under `tests/configs/`, same data and `STG
 | Trainer | GPU machine | `./run_trainer.sh` |
 | Follower | CPU container | `./run_follower.sh` |
 
+Default role mapping in scripts:
+
+- `rank=1` is trainer (GPU)
+- `rank=0` is follower (CPU)
+
 ## Files
 
 - `ddp_train.py` — distributed entry (argparse + `trainer_step` loop).
@@ -47,6 +52,7 @@ Both scripts log one line per epoch with the same fields so you can `grep '[benc
 
 - **Local:** `python train.py` (optional `--epochs N` or `EPOCHS=N`). Uses `tests/configs/` like `ddp_train.py`.
 - **Hetero:** `EPOCHS=N ./run_trainer.sh` and matching follower. Each rank prints `epoch_sec` for that epoch (they should be similar because steps synchronize).
+- By default `SKIP_FOLLOWER_FORWARD=1`, so follower skips local forward and only joins `trainer_step()` sync each step.
 
 Example:
 
@@ -59,4 +65,4 @@ grep '\[bench\]' local.log trainer.log
 
 ### Why local CPU can look faster than GPU hetero
 
-Hetero training is **not** “GPU only”: every step still needs the **follower forward**, **Gloo** collectives, and **parameter sync** over the network. If the model and batch are small, that **communication and coordination** dominates; a single-process CPU run avoids all of that. Wall-clock `epoch_sec` reflects the **slowest path** (often sync-bound), not raw GPU FLOPs.
+Hetero training is still not “GPU only”: each step must coordinate across ranks with **Gloo** and **parameter sync** over the network. Even with follower forward skipped, wall-clock `epoch_sec` is set by the slowest distributed path (sync + CPU/network overhead), not raw GPU FLOPs.
