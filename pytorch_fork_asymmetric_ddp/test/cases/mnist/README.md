@@ -15,7 +15,7 @@ This is a **second**, standalone case: it does **not** import `ddp_hetero_common
 Same runtime and asymmetric `backward` / `trainer_step` split as Case 1, plus:
 
 1. **Batch alignment:** this demo uses `dist.broadcast` so follower sees the same batch as trainer; a real app might share indices or a dataloader protocol instead.
-2. **Metrics:** print whatever they use (MSE, accuracy, etc.) on **each** rank if they want to diff logs manually—same idea as the `metric rank=...` lines here.
+2. **Metrics:** print whatever they use (MSE, accuracy, etc.) on **each** rank if they want to diff logs manually—same idea as the `metric rank=...` lines here. Test-set `evaluate()` runs **once** after training steps finish.
 3. **Data:** MNIST here; swap for their dataset. If torchvision conflicts with a custom torch build, this script falls back to raw MNIST IDX download.
 
 ## Run

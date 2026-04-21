@@ -6,7 +6,7 @@ diff logs by hand. No cross-rank all_gather or automatic correctness asserts.
 
 Metrics (MNIST classification example):
   - train_loss: batch cross-entropy (analogous spot to plug in MSE for regression)
-  - test_ce_loss / accuracy: full test set after trainer_step sync
+  - test_ce_loss / accuracy: full test set once after training steps finish
 Follower can save checkpoints; correctness is for you to compare printed lines.
 """
 
@@ -56,7 +56,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--momentum", type=float, default=0.9)
     parser.add_argument("--log-interval", type=int, default=50)
-    parser.add_argument("--eval-interval", type=int, default=200)
     parser.add_argument("--max-steps", type=int, default=1000)
     parser.add_argument("--data-dir", default="/tmp/mnist_data")
     parser.add_argument("--save-every-steps", type=int, default=200)
@@ -185,7 +184,6 @@ def evaluate(
             pred = logits.argmax(dim=1)
             correct += int((pred == y).sum().item())
             total += int(y.numel())
-    model.train()
     mean_ce = total_loss / max(1, total)
     acc = correct / max(1, total)
     return mean_ce, acc
@@ -302,14 +300,6 @@ def main() -> None:
                 print(
                     f"metric rank={rank} step={step} train_loss={float(train_loss.item()):.6f} "
                     f"param_sum={ps:.6f} elapsed_s={elapsed:.2f}",
-                    flush=True,
-                )
-
-            if (step > 0) and (step % max(1, args.eval_interval) == 0):
-                test_ce_loss, accuracy = evaluate(ddp.module, eval_loader, device)
-                print(
-                    f"metric rank={rank} eval_step={step} test_ce_loss={test_ce_loss:.6f} "
-                    f"accuracy={accuracy:.6f}",
                     flush=True,
                 )
 

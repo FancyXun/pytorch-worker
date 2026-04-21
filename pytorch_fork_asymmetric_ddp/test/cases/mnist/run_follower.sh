@@ -12,7 +12,6 @@ export RANK="${RANK:-1}"
 export EPOCHS="${EPOCHS:-1}"
 export MAX_STEPS="${MAX_STEPS:-1000}"
 export LOG_INTERVAL="${LOG_INTERVAL:-50}"
-export EVAL_INTERVAL="${EVAL_INTERVAL:-200}"
 export BATCH_SIZE="${BATCH_SIZE:-128}"
 export DATA_DIR="${DATA_DIR:-/tmp/mnist_data}"
 export SAVE_EVERY_STEPS="${SAVE_EVERY_STEPS:-200}"
@@ -46,7 +45,6 @@ python3 ddp_hetero_mnist.py \
   --max-steps "$MAX_STEPS" \
   --batch-size "$BATCH_SIZE" \
   --log-interval "$LOG_INTERVAL" \
-  --eval-interval "$EVAL_INTERVAL" \
   --data-dir "$DATA_DIR" \
   --save-every-steps "$SAVE_EVERY_STEPS" \
   --save-dir "$SAVE_DIR"
