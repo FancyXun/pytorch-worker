@@ -114,18 +114,54 @@
 
 ---
 
-## 7. 可直接放文档的图表说明
+## 7. 图表占位与解读（可直接用于知乎）
 
-已生成三张图，建议搭配下面的图注：
+下面给出三张图的**占位模板**。你只需要把 `TODO` 路径替换成你实际上传后的图片地址（本地路径或图床 URL）。
 
-- `epoch_time_comparison.png`  
-  图注：四种运行模式每 epoch 耗时曲线；异构双 rank 基本重合，说明训练受同步节奏约束。
+### 图 1：每个 Epoch 耗时对比
 
-- `epoch_mse_comparison.png`  
-  图注：四种模式的 loss 曲线对齐情况；异构 Trainer 与本地 GPU 曲线重合，验证训练语义一致。
+```markdown
+![图1：每个Epoch耗时对比](TODO/epoch_time_comparison.png)
+```
 
-- `mean_epoch_time_bar.png`  
-  图注：去除 warmup 后的平均 epoch 时间对比；异构相对 CPU 提速明显，但与单机 GPU 仍有系统开销差距。
+图注建议：  
+四种运行模式（local_gpu、local_cpu、hetero_trainer、hetero_follower）的每 epoch 耗时曲线。`hetero_trainer` 与 `hetero_follower` 基本重合，说明异构训练由同步节奏锁步推进；`hetero_trainer` 明显快于 `local_cpu`，但慢于 `local_gpu`。
+
+文中解读建议：
+
+- 异构路径已显著降低 CPU-only 的训练时间；
+- 异构双 rank 同步紧密，说明参数同步语义稳定；
+- 与单机 GPU 的差距主要来自同步与通信成本，而非指标偏移。
+
+### 图 2：每个 Epoch 指标（MSE）对比
+
+```markdown
+![图2：每个Epoch指标对比](TODO/epoch_mse_comparison.png)
+```
+
+图注建议：  
+四种运行模式的 epoch_mse 曲线对比。异构 Trainer 与本地 GPU 曲线重合，异构 Follower 通过内部指标同步得到一致结果，表明本次改造没有破坏训练语义。
+
+文中解读建议：
+
+- 指标曲线重合意味着“快”不是以牺牲正确性为代价；
+- follower 不做前向后，仍可得到可观测、可追踪的训练指标；
+- 可以把“性能收益 + 指标一致”作为改造有效性的核心证据。
+
+### 图 3：平均 Epoch 耗时柱状图
+
+```markdown
+![图3：平均Epoch耗时柱状图](TODO/mean_epoch_time_bar.png)
+```
+
+图注建议：  
+去除 warmup epoch 后的平均 epoch 时间对比。异构方案相对 CPU-only 具有明显吞吐优势，但相较单机 GPU 仍存在系统级开销差距。
+
+文中解读建议：
+
+- 重点强调“异构是工程折中最优解”，不是“绝对最快”；
+- 当前版本可作为可用基线，后续通过同步间隔、同步聚合等继续优化；
+- 该图最适合作为结论图放在文末。
 
 ---
 
