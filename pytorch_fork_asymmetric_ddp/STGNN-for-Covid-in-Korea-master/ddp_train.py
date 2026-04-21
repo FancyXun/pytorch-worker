@@ -8,7 +8,7 @@ Default roles in this script are:
 
 Optimization loop:
   - trainer: forward + backward + ddp.trainer_step(optimizer)
-  - follower: ddp.trainer_step(None), and can skip forward for speed experiments
+  - follower: ddp.trainer_step(None) only (always skips local forward)
 
 Requires the team's forked PyTorch with asymmetric DDP (TORCH_DDP_* env vars).
 Each rank loads the same DataLoader order (shuffle=False) like native multi-process training.
@@ -139,15 +139,6 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--save-every-epochs", type=int, default=0)
     p.add_argument("--save-dir", default="/tmp/stgnn_hetero_ckpt")
-    p.add_argument(
-        "--skip-follower-forward",
-        action="store_true",
-        default=(os.environ.get("SKIP_FOLLOWER_FORWARD", "1") == "1"),
-        help=(
-            "If set, follower rank skips ddp forward and only participates in "
-            "trainer_step() sync. Default enabled via SKIP_FOLLOWER_FORWARD=1."
-        ),
-    )
     return p.parse_args()
 
 
@@ -246,7 +237,6 @@ def main() -> None:
     print(
         f"[rank{rank}] stgnn_hetero device={device} nodes={target_nodes} "
         f"batches_per_epoch={len(train_dl)} epochs={epochs} "
-        f"skip_follower_forward={args.skip_follower_forward} "
         f"cfg={ddp.get_asymmetric_mode_config()}",
         flush=True,
     )
@@ -274,13 +264,9 @@ def main() -> None:
                 loss = loss_fn(y_pred, y_batch)
                 loss.backward()
                 loss_scalar = float(loss.item())
-            elif args.skip_follower_forward:
+            else:
                 # Follower participates in parameter sync only; no local forward.
                 loss_scalar = float("nan")
-            else:
-                y_pred = ddp(x_batch, adj)
-                loss = loss_fn(y_pred, y_batch)
-                loss_scalar = float(loss.item())
 
             ddp.trainer_step(optimizer if is_trainer else None)
             # Keep follower metrics meaningful even when follower skips forward.

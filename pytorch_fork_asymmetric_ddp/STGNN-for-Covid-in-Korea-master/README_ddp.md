@@ -52,7 +52,7 @@ Both scripts log one line per epoch with the same fields so you can `grep '[benc
 
 - **Local:** `python train.py` (optional `--epochs N` or `EPOCHS=N`). Uses `tests/configs/` like `ddp_train.py`.
 - **Hetero:** `EPOCHS=N ./run_trainer.sh` and matching follower. Each rank prints `epoch_sec` for that epoch (they should be similar because steps synchronize).
-- By default `SKIP_FOLLOWER_FORWARD=1`, so follower skips local forward and only joins `trainer_step()` sync each step.
+- Follower always skips local forward and only joins `trainer_step()` sync each step.
 
 Example:
 
