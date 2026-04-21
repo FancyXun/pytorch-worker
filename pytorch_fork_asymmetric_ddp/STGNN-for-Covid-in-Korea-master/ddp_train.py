@@ -20,6 +20,7 @@ import argparse
 import os
 import sys
 import time
+from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
@@ -119,6 +120,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--master-addr", default="127.0.0.1")
     p.add_argument("--master-port", type=int, default=29623)
     p.add_argument(
+        "--init-timeout-sec",
+        type=int,
+        default=int(os.environ.get("INIT_TIMEOUT_SEC", "90")),
+        help="Timeout (seconds) for dist.init_process_group (default: 90).",
+    )
+    p.add_argument(
         "--epochs",
         type=int,
         default=None,
@@ -153,7 +160,18 @@ def main() -> None:
     os.environ["WORLD_SIZE"] = str(args.world_size)
     os.environ["RANK"] = str(args.rank)
 
-    dist.init_process_group(backend="gloo", init_method="env://")
+    print(
+        f"[rank{args.rank}] init_pg_start backend=gloo master={args.master_addr}:{args.master_port} "
+        f"world_size={args.world_size} timeout_sec={args.init_timeout_sec} "
+        f"iface={os.environ.get('GLOO_SOCKET_IFNAME', '<unset>')}",
+        flush=True,
+    )
+    dist.init_process_group(
+        backend="gloo",
+        init_method="env://",
+        timeout=timedelta(seconds=args.init_timeout_sec),
+    )
+    print(f"[rank{args.rank}] init_pg_done", flush=True)
     rank = args.rank
 
     if rank == args.trainer_rank:

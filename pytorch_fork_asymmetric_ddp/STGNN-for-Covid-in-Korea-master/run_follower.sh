@@ -13,6 +13,7 @@ export EPOCHS="${EPOCHS:-}"
 export LOG_INTERVAL="${LOG_INTERVAL:-0}"
 export SAVE_EVERY_EPOCHS="${SAVE_EVERY_EPOCHS:-10}"
 export SAVE_DIR="${SAVE_DIR:-/tmp/stgnn_hetero_ckpt}"
+export INIT_TIMEOUT_SEC="${INIT_TIMEOUT_SEC:-90}"
 
 export TORCH_DISTRIBUTED_DEBUG="${TORCH_DISTRIBUTED_DEBUG:-DETAIL}"
 export TORCH_DDP_ASYMMETRIC_MODE="${TORCH_DDP_ASYMMETRIC_MODE:-1}"
@@ -30,12 +31,22 @@ if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]] && command -v ip >/dev/null 2>&1; then
   )"
 fi
 if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
-  GLOO_SOCKET_IFNAME="eth0"
-  echo "WARN: set GLOO_SOCKET_IFNAME explicitly if needed; defaulting to eth0 (no usable iproute2 or no route match)." >&2
+  if [[ -d /sys/class/net/eth0 ]]; then
+    GLOO_SOCKET_IFNAME="eth0"
+  else
+    GLOO_SOCKET_IFNAME="$(
+      ls /sys/class/net 2>/dev/null | awk '$0 != "lo" {print; exit}' || true
+    )"
+  fi
+  if [[ -z "${GLOO_SOCKET_IFNAME:-}" ]]; then
+    echo "ERROR: unable to infer GLOO_SOCKET_IFNAME; please export it explicitly." >&2
+    exit 2
+  fi
+  echo "WARN: iproute2 missing or no route match; inferred GLOO_SOCKET_IFNAME=$GLOO_SOCKET_IFNAME" >&2
 fi
 export GLOO_SOCKET_IFNAME
 
-echo "[stgnn/follower] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT RANK=$RANK TRAINER_RANK=$TORCH_DDP_TRAINER_RANK IFACE=$GLOO_SOCKET_IFNAME SAVE_DIR=$SAVE_DIR"
+echo "[stgnn/follower] MASTER_ADDR=$MASTER_ADDR MASTER_PORT=$MASTER_PORT RANK=$RANK TRAINER_RANK=$TORCH_DDP_TRAINER_RANK IFACE=$GLOO_SOCKET_IFNAME INIT_TIMEOUT_SEC=$INIT_TIMEOUT_SEC SAVE_DIR=$SAVE_DIR"
 
 EXTRA=()
 if [[ -n "${EPOCHS}" ]]; then
@@ -48,6 +59,7 @@ python3 ddp_train.py \
   --world-size "$WORLD_SIZE" \
   --master-addr "$MASTER_ADDR" \
   --master-port "$MASTER_PORT" \
+  --init-timeout-sec "$INIT_TIMEOUT_SEC" \
   --log-interval "$LOG_INTERVAL" \
   --save-every-epochs "$SAVE_EVERY_EPOCHS" \
   --save-dir "$SAVE_DIR" \
