@@ -34,6 +34,13 @@ MASTER_ADDR=10.60.82.27 MASTER_PORT=29623 \
 ./auto_ddp/run_user_follower.sh /path/to/user_train.py --arg1 xxx
 ```
 
+For single-host local test only, allow loopback explicitly:
+
+```bash
+ALLOW_LOOPBACK_MASTER=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=29623 \
+./auto_ddp/run_user_trainer.sh /path/to/user_train.py
+```
+
 ## Notes
 
 - This mode targets common "single model + single optimizer + scalar criterion" training style.
@@ -42,4 +49,5 @@ MASTER_ADDR=10.60.82.27 MASTER_PORT=29623 \
   `TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD=1` in launcher scripts.
 - For uncommon training loops (closure/multi-model/custom loss control flow),
   disable skip via `TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD=0`.
+- Default init timeout is `TORCH_DDP_INIT_TIMEOUT_SEC=90`.
 

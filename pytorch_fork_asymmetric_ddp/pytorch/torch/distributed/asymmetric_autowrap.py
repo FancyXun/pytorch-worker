@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import weakref
+from datetime import timedelta
 from typing import Iterable, List, Optional
 
 import torch
@@ -67,7 +68,20 @@ def _init_pg_if_needed() -> None:
         raise RuntimeError(
             "TORCH_DDP_AUTO_WRAP=1 requires MASTER_ADDR/MASTER_PORT when WORLD_SIZE>1"
         )
-    dist.init_process_group(backend="gloo", init_method="env://")
+    timeout_sec = int(os.environ.get("TORCH_DDP_INIT_TIMEOUT_SEC", "90"))
+    rank = int(os.environ.get("RANK", "0"))
+    print(
+        f"[auto-ddp rank={rank}] init_pg_start backend=gloo "
+        f"master={os.environ.get('MASTER_ADDR')}:{os.environ.get('MASTER_PORT')} "
+        f"world_size={os.environ.get('WORLD_SIZE')} timeout_sec={timeout_sec}",
+        flush=True,
+    )
+    dist.init_process_group(
+        backend="gloo",
+        init_method="env://",
+        timeout=timedelta(seconds=timeout_sec),
+    )
+    print(f"[auto-ddp rank={rank}] init_pg_done", flush=True)
 
 
 def _flatten_params(params: Iterable) -> List[torch.nn.Parameter]:
