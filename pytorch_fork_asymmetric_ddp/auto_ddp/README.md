@@ -14,6 +14,9 @@ training script without editing Python code for DDP role branching.
    - `optimizer.step()` is intercepted:
      - trainer rank executes real step
      - all ranks perform param sync from trainer at configured interval
+   - optional auto skip follower forward (enabled by launcher):
+     - follower model call returns a token instead of real forward compute
+     - scalar loss is broadcast from trainer during criterion call
 
 ## Launch
 
@@ -33,8 +36,10 @@ MASTER_ADDR=10.60.82.27 MASTER_PORT=29623 \
 
 ## Notes
 
-- This mode targets common "single model + single optimizer" training style.
+- This mode targets common "single model + single optimizer + scalar criterion" training style.
 - It removes explicit `is_trainer` branching from user code.
-- Follower forward is still executed in this generic mode because the framework
-  cannot safely infer how to skip arbitrary user forward graph without script-level integration.
+- Follower forward skip is enabled by default via
+  `TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD=1` in launcher scripts.
+- For uncommon training loops (closure/multi-model/custom loss control flow),
+  disable skip via `TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD=0`.
 

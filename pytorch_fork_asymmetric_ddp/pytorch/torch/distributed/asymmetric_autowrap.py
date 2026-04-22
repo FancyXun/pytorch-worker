@@ -12,6 +12,7 @@ _ENABLED = False
 _RANK = -1
 _TRAINER_RANK = 0
 _SYNC_INTERVAL = 1
+_AUTO_SKIP_FOLLOWER_FORWARD = False
 
 _MODULES: "weakref.WeakSet[torch.nn.Module]" = weakref.WeakSet()
 _OPTIMIZER_DDP: "weakref.WeakKeyDictionary[torch.optim.Optimizer, DDP]" = (
@@ -27,6 +28,14 @@ _ORIG_OPTIMIZER_INIT = None
 _ORIG_OPTIMIZER_STEP = None
 _ORIG_TENSOR_BACKWARD = None
 _ORIG_AUTO_BACKWARD = None
+_LAST_DDP_FOR_LOSS: Optional[DDP] = None
+
+
+class _SkippedForwardToken:
+    __slots__ = ("ddp",)
+
+    def __init__(self, ddp: DDP):
+        self.ddp = ddp
 
 
 def _set_default_env() -> None:
@@ -37,6 +46,7 @@ def _set_default_env() -> None:
     os.environ.setdefault("TORCH_DDP_NON_TRAINER_FORWARD_ONLY", "1")
     os.environ.setdefault("TORCH_DDP_NON_TRAINER_BACKWARD", "error")
     os.environ.setdefault("TORCH_DDP_SYNC_INTERVAL", "1")
+    os.environ.setdefault("TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD", "0")
     os.environ.setdefault("WORLD_SIZE", "1")
     os.environ.setdefault("RANK", "0")
 
@@ -128,8 +138,29 @@ def _patch_module_call() -> None:
     _ORIG_MODULE_CALL = torch.nn.Module.__call__
 
     def _wrapped_call(self, *args, **kwargs):
+        global _LAST_DDP_FOR_LOSS
+        if (
+            _is_dist_enabled()
+            and isinstance(self, torch.nn.modules.loss._Loss)
+            and _LAST_DDP_FOR_LOSS is not None
+        ):
+            # Follower path: loss receives a skipped-forward token and gets
+            # trainer scalar via broadcast.
+            if _AUTO_SKIP_FOLLOWER_FORWARD and args and isinstance(args[0], _SkippedForwardToken):
+                scalar = _LAST_DDP_FOR_LOSS.sync_scalar_from_trainer(None)
+                return torch.tensor(float(scalar), dtype=torch.float32, device="cpu")
+
+            # Trainer path: compute local scalar then broadcast to followers.
+            out = _ORIG_MODULE_CALL(self, *args, **kwargs)
+            if isinstance(out, torch.Tensor) and out.numel() == 1:
+                _LAST_DDP_FOR_LOSS.sync_scalar_from_trainer(float(out.detach().item()))
+            return out
+
         ddp = getattr(self, "_asym_ddp_wrapper", None)
         if ddp is not None:
+            _LAST_DDP_FOR_LOSS = ddp
+            if _AUTO_SKIP_FOLLOWER_FORWARD and _RANK != _TRAINER_RANK and _is_dist_enabled():
+                return _SkippedForwardToken(ddp)
             return ddp(*args, **kwargs)
         return _ORIG_MODULE_CALL(self, *args, **kwargs)
 
@@ -195,7 +226,7 @@ def _patch_backward_for_follower() -> None:
 
 
 def enable_from_env() -> None:
-    global _ENABLED, _RANK, _TRAINER_RANK, _SYNC_INTERVAL
+    global _ENABLED, _RANK, _TRAINER_RANK, _SYNC_INTERVAL, _AUTO_SKIP_FOLLOWER_FORWARD
     if _ENABLED:
         return
     if os.environ.get("TORCH_DDP_AUTO_WRAP", "0") != "1":
@@ -205,6 +236,9 @@ def enable_from_env() -> None:
     _RANK = int(os.environ.get("RANK", "0"))
     _TRAINER_RANK = int(os.environ.get("TORCH_DDP_TRAINER_RANK", "0"))
     _SYNC_INTERVAL = max(1, int(os.environ.get("TORCH_DDP_SYNC_INTERVAL", "1")))
+    _AUTO_SKIP_FOLLOWER_FORWARD = (
+        os.environ.get("TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD", "0") == "1"
+    )
 
     _init_pg_if_needed()
     _patch_module_init()
