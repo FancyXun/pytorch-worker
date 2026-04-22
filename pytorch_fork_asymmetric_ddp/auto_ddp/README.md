@@ -50,4 +50,6 @@ ALLOW_LOOPBACK_MASTER=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=29623 \
 - For uncommon training loops (closure/multi-model/custom loss control flow),
   disable skip via `TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD=0`.
 - Default init timeout is `TORCH_DDP_INIT_TIMEOUT_SEC=90`.
+- Launchers infer and export `GLOO_SOCKET_IFNAME`; set it explicitly if needed.
+- Runtime init is strict: if distributed bootstrap fails, user script is not executed.
 
