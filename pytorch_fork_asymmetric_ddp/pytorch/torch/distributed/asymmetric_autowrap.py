@@ -4,6 +4,7 @@ import os
 import weakref
 from datetime import timedelta
 from typing import Iterable, List, Optional
+from contextlib import contextmanager
 
 import torch
 import torch.distributed as dist
@@ -16,6 +17,7 @@ _SYNC_INTERVAL = 1
 _AUTO_SKIP_FOLLOWER_FORWARD = False
 
 _MODULES: "weakref.WeakSet[torch.nn.Module]" = weakref.WeakSet()
+_MODULE_DDP: "weakref.WeakKeyDictionary[torch.nn.Module, DDP]" = weakref.WeakKeyDictionary()
 _OPTIMIZER_DDP: "weakref.WeakKeyDictionary[torch.optim.Optimizer, DDP]" = (
     weakref.WeakKeyDictionary()
 )
@@ -30,6 +32,7 @@ _ORIG_OPTIMIZER_STEP = None
 _ORIG_TENSOR_BACKWARD = None
 _ORIG_AUTO_BACKWARD = None
 _LAST_DDP_FOR_LOSS: Optional[DDP] = None
+_IN_REDIRECTED_DDP_FORWARD = False
 
 
 class _SkippedForwardToken:
@@ -118,7 +121,7 @@ def _find_owner_module(params: List[torch.nn.Parameter]) -> Optional[torch.nn.Mo
 
 
 def _wrap_module_if_needed(module: torch.nn.Module) -> DDP:
-    wrapper = getattr(module, "_asym_ddp_wrapper", None)
+    wrapper = _MODULE_DDP.get(module, None)
     if wrapper is not None:
         return wrapper
 
@@ -132,7 +135,7 @@ def _wrap_module_if_needed(module: torch.nn.Module) -> DDP:
         module = module.to(torch.device("cpu"))
         ddp = DDP(module, broadcast_buffers=False)
 
-    setattr(module, "_asym_ddp_wrapper", ddp)
+    _MODULE_DDP[module] = ddp
     return ddp
 
 
@@ -150,6 +153,16 @@ def _patch_module_init() -> None:
 def _patch_module_call() -> None:
     global _ORIG_MODULE_CALL
     _ORIG_MODULE_CALL = torch.nn.Module.__call__
+
+    @contextmanager
+    def _ddp_forward_guard():
+        global _IN_REDIRECTED_DDP_FORWARD
+        prev = _IN_REDIRECTED_DDP_FORWARD
+        _IN_REDIRECTED_DDP_FORWARD = True
+        try:
+            yield
+        finally:
+            _IN_REDIRECTED_DDP_FORWARD = prev
 
     def _wrapped_call(self, *args, **kwargs):
         global _LAST_DDP_FOR_LOSS
@@ -170,12 +183,16 @@ def _patch_module_call() -> None:
                 _LAST_DDP_FOR_LOSS.sync_scalar_from_trainer(float(out.detach().item()))
             return out
 
-        ddp = getattr(self, "_asym_ddp_wrapper", None)
+        ddp = _MODULE_DDP.get(self, None)
         if ddp is not None:
+            # Prevent recursive bounce: DDP.forward internally calls self.module(...).
+            if _IN_REDIRECTED_DDP_FORWARD:
+                return _ORIG_MODULE_CALL(self, *args, **kwargs)
             _LAST_DDP_FOR_LOSS = ddp
             if _AUTO_SKIP_FOLLOWER_FORWARD and _RANK != _TRAINER_RANK and _is_dist_enabled():
                 return _SkippedForwardToken(ddp)
-            return ddp(*args, **kwargs)
+            with _ddp_forward_guard():
+                return ddp(*args, **kwargs)
         return _ORIG_MODULE_CALL(self, *args, **kwargs)
 
     torch.nn.Module.__call__ = _wrapped_call
