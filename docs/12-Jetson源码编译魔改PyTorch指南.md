@@ -22,6 +22,17 @@ cat /etc/nv_tegra_release
 - JetPack / CUDA / Python 版本保持一致性（不要混装多个 CUDA）。
 - 编译过程非常吃内存，建议至少准备 **8GB+ RAM + 8GB+ swap**。
 
+### 你的当前环境（已确认）
+
+根据你提供的输出：
+
+- Kernel: `5.15.148-tegra`
+- Python: `3.10.12`
+- CUDA: `12.6` (`nvcc 12.6.68`)
+- L4T: `36.4.3`（`nvidia-l4t-core 36.4.3`）
+
+这对应 **JetPack 6.x 系列（R36）**。本文后续步骤可直接套用。
+
 ---
 
 ## 2. 准备系统依赖
@@ -40,6 +51,12 @@ sudo apt install -y \
   python3-pip \
   python3-setuptools \
   python3-wheel
+```
+
+针对你当前 Python 3.10，建议补齐：
+
+```bash
+sudo apt install -y python3.10-dev
 ```
 
 > 如果你需要分布式 Gloo 网络功能，系统里保留常用网络工具（例如 `iproute2`）会更方便排障。
@@ -120,6 +137,8 @@ export MAX_JOBS=4
 ```
 
 > `USE_NCCL=0` 是为了 Jetson 场景更稳（单机多卡通常也不是 Jetson 主场景）；你当前异构 DDP 主路径基于 Gloo 可工作。
+
+> 对你当前环境（L4T 36.4.3 + CUDA 12.6），若设备是 Orin 系列，继续使用 `TORCH_CUDA_ARCH_LIST="8.7"`。
 
 ---
 
@@ -230,6 +249,26 @@ export BUILD_TEST=0 MAX_JOBS=4
 python setup.py bdist_wheel
 
 # 6) 安装
+pip install dist/torch-*.whl
+```
+
+如果你要严格按“你这台机器”一键执行，可用下面这段（等价于上面流程）：
+
+```bash
+source ~/venvs/torch_build/bin/activate
+cd /code/pytorch-worker/pytorch_fork_asymmetric_ddp/pytorch
+git submodule update --init --recursive
+
+export TORCH_CUDA_ARCH_LIST="8.7"
+export USE_CUDA=1
+export USE_CUDNN=1
+export USE_DISTRIBUTED=1
+export USE_GLOO=1
+export USE_NCCL=0
+export BUILD_TEST=0
+export MAX_JOBS=4
+
+python setup.py bdist_wheel
 pip install dist/torch-*.whl
 ```
 
