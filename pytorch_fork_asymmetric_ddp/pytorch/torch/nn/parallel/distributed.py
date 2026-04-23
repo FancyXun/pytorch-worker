@@ -328,8 +328,24 @@ def _ddp_asymmetric_debug_enabled() -> bool:
     return os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG", "0") == "1"
 
 
+_DDP_ASYM_DEBUG_COUNTERS = {}
+
+
 def _ddp_asymmetric_debug_log(rank, event: str, **fields) -> None:
     if not _ddp_asymmetric_debug_enabled():
+        return
+    events_filter = {
+        e.strip()
+        for e in os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS", "").split(",")
+        if e.strip()
+    }
+    if events_filter and event not in events_filter:
+        return
+    every_n = max(1, int(os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG_EVERY_N", "1")))
+    key = (rank, event)
+    cnt = int(_DDP_ASYM_DEBUG_COUNTERS.get(key, 0)) + 1
+    _DDP_ASYM_DEBUG_COUNTERS[key] = cnt
+    if every_n > 1 and (cnt % every_n) != 0:
         return
     parts = [f"[ddp-asym-debug rank={rank}] {event}"]
     for k, v in fields.items():

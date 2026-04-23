@@ -52,4 +52,7 @@ ALLOW_LOOPBACK_MASTER=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=29623 \
 - Default init timeout is `TORCH_DDP_INIT_TIMEOUT_SEC=90`.
 - Launchers infer and export `GLOO_SOCKET_IFNAME`; set it explicitly if needed.
 - Runtime init is strict: if distributed bootstrap fails, user script is not executed.
+- Debug throttling knobs:
+  - `TORCH_DDP_ASYMMETRIC_DEBUG_EVERY_N=K` (log one out of K same events)
+  - `TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS=event1,event2` (whitelist events)
 

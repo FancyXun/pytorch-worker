@@ -13,6 +13,8 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 
 _ENABLED = False
 _DEBUG = False
+_DEBUG_EVERY_N = 1
+_DEBUG_EVENTS = set()
 _RANK = -1
 _TRAINER_RANK = 0
 _SYNC_INTERVAL = 1
@@ -35,6 +37,7 @@ _ORIG_TENSOR_BACKWARD = None
 _ORIG_AUTO_BACKWARD = None
 _LAST_DDP_FOR_LOSS: Optional[DDP] = None
 _IN_REDIRECTED_DDP_FORWARD = False
+_DEBUG_COUNTERS = {}
 
 
 def _asymmetric_debug_enabled() -> bool:
@@ -43,6 +46,12 @@ def _asymmetric_debug_enabled() -> bool:
 
 def _debug_log(event: str, **fields) -> None:
     if not _DEBUG:
+        return
+    if _DEBUG_EVENTS and event not in _DEBUG_EVENTS:
+        return
+    cnt = int(_DEBUG_COUNTERS.get(event, 0)) + 1
+    _DEBUG_COUNTERS[event] = cnt
+    if _DEBUG_EVERY_N > 1 and (cnt % _DEBUG_EVERY_N) != 0:
         return
     parts = [f"[auto-ddp-debug rank={_RANK}] {event}"]
     for k, v in fields.items():
@@ -70,6 +79,8 @@ def _set_default_env() -> None:
     os.environ.setdefault("TORCH_DDP_SYNC_INTERVAL", "1")
     os.environ.setdefault("TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD", "0")
     os.environ.setdefault("TORCH_DDP_ASYMMETRIC_DEBUG", "0")
+    os.environ.setdefault("TORCH_DDP_ASYMMETRIC_DEBUG_EVERY_N", "1")
+    os.environ.setdefault("TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS", "")
     os.environ.setdefault("WORLD_SIZE", "1")
     os.environ.setdefault("RANK", "0")
 
@@ -327,7 +338,8 @@ def _patch_backward_for_follower() -> None:
 
 
 def enable_from_env() -> None:
-    global _ENABLED, _DEBUG, _RANK, _TRAINER_RANK, _SYNC_INTERVAL, _AUTO_SKIP_FOLLOWER_FORWARD
+    global _ENABLED, _DEBUG, _DEBUG_EVERY_N, _DEBUG_EVENTS
+    global _RANK, _TRAINER_RANK, _SYNC_INTERVAL, _AUTO_SKIP_FOLLOWER_FORWARD
     if _ENABLED:
         return
     if os.environ.get("TORCH_DDP_AUTO_WRAP", "0") != "1":
@@ -341,6 +353,12 @@ def enable_from_env() -> None:
         os.environ.get("TORCH_DDP_AUTO_SKIP_FOLLOWER_FORWARD", "0") == "1"
     )
     _DEBUG = _asymmetric_debug_enabled()
+    _DEBUG_EVERY_N = max(1, int(os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG_EVERY_N", "1")))
+    _DEBUG_EVENTS = {
+        e.strip()
+        for e in os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS", "").split(",")
+        if e.strip()
+    }
 
     _init_pg_if_needed()
     _patch_module_init()
