@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import types
 import weakref
 from datetime import timedelta
 from typing import Iterable, List, Optional
@@ -35,7 +36,6 @@ _OPTIMIZER_STEP_COUNT: "weakref.WeakKeyDictionary[torch.optim.Optimizer, int]" =
 _ORIG_MODULE_INIT = None
 _ORIG_MODULE_CALL = None
 _ORIG_OPTIMIZER_INIT = None
-_ORIG_OPTIMIZER_STEP = None
 _ORIG_TENSOR_BACKWARD = None
 _ORIG_AUTO_BACKWARD = None
 _LAST_DDP_FOR_LOSS: Optional[DDP] = None
@@ -339,45 +339,53 @@ def _patch_optimizer_init() -> None:
         ddp = _wrap_module_if_needed(owner)
         _OPTIMIZER_DDP[self] = ddp
         _OPTIMIZER_STEP_COUNT[self] = 0
+        if getattr(self, "_asym_step_wrapped", False):
+            return
+
+        # Wrap each optimizer instance directly so subclass overrides
+        # (e.g., Adam.step) are always intercepted.
+        self._asym_orig_step = self.step
+
+        def _wrapped_instance_step(opt_self, *args, **kwargs):
+            global _SUMMARY_STEP_TOTAL
+            _ddp = _OPTIMIZER_DDP.get(opt_self, None)
+            if _ddp is None:
+                return opt_self._asym_orig_step(*args, **kwargs)
+
+            is_trainer = bool(_ddp.is_trainer_rank())
+            t_step = time.perf_counter()
+            result = opt_self._asym_orig_step(*args, **kwargs) if is_trainer else None
+            if is_trainer:
+                step_ms = (time.perf_counter() - t_step) * 1000.0
+                _debug_log(
+                    "optimizer_step_local_trainer",
+                    wall_ms=step_ms,
+                )
+                _summary_add("optimizer_step_local", step_ms)
+            else:
+                _debug_log("optimizer_step_skipped_follower", wall_ms=0.0)
+                _summary_add("optimizer_step_skipped", 0.0)
+
+            step = _OPTIMIZER_STEP_COUNT.get(opt_self, 0) + 1
+            _OPTIMIZER_STEP_COUNT[opt_self] = step
+            _SUMMARY_STEP_TOTAL = max(_SUMMARY_STEP_TOTAL, step)
+            if step % _SYNC_INTERVAL == 0:
+                t_sync = time.perf_counter()
+                _ddp.sync_params_from_trainer()
+                _summary_add("sync_params", (time.perf_counter() - t_sync) * 1000.0)
+            _summary_flush_if_needed(is_trainer=is_trainer)
+            return result
+
+        self.step = types.MethodType(_wrapped_instance_step, self)
+        self._asym_step_wrapped = True
 
     torch.optim.Optimizer.__init__ = _wrapped_opt_init
 
 
 def _patch_optimizer_step() -> None:
-    global _ORIG_OPTIMIZER_STEP
-    _ORIG_OPTIMIZER_STEP = torch.optim.Optimizer.step
-
-    def _wrapped_step(self, *args, **kwargs):
-        global _SUMMARY_STEP_TOTAL
-        ddp = _OPTIMIZER_DDP.get(self, None)
-        if ddp is None:
-            return _ORIG_OPTIMIZER_STEP(self, *args, **kwargs)
-
-        is_trainer = bool(ddp.is_trainer_rank())
-        t_step = time.perf_counter()
-        result = _ORIG_OPTIMIZER_STEP(self, *args, **kwargs) if is_trainer else None
-        if is_trainer:
-            step_ms = (time.perf_counter() - t_step) * 1000.0
-            _debug_log(
-                "optimizer_step_local_trainer",
-                wall_ms=step_ms,
-            )
-            _summary_add("optimizer_step_local", step_ms)
-        else:
-            _debug_log("optimizer_step_skipped_follower", wall_ms=0.0)
-            _summary_add("optimizer_step_skipped", 0.0)
-
-        step = _OPTIMIZER_STEP_COUNT.get(self, 0) + 1
-        _OPTIMIZER_STEP_COUNT[self] = step
-        _SUMMARY_STEP_TOTAL = max(_SUMMARY_STEP_TOTAL, step)
-        if step % _SYNC_INTERVAL == 0:
-            t_sync = time.perf_counter()
-            ddp.sync_params_from_trainer()
-            _summary_add("sync_params", (time.perf_counter() - t_sync) * 1000.0)
-        _summary_flush_if_needed(is_trainer=is_trainer)
-        return result
-
-    torch.optim.Optimizer.step = _wrapped_step
+    # No-op: step interception is done per optimizer instance in __init__
+    # to cover subclass overrides like Adam.step.
+    return None
 
 
 def _patch_backward_for_follower() -> None:
