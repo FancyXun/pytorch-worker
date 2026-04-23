@@ -55,4 +55,8 @@ ALLOW_LOOPBACK_MASTER=1 MASTER_ADDR=127.0.0.1 MASTER_PORT=29623 \
 - Debug throttling knobs:
   - `TORCH_DDP_ASYMMETRIC_DEBUG_EVERY_N=K` (log one out of K same events)
   - `TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS=event1,event2` (whitelist events)
+- Summary knobs (low-noise timing overview):
+  - `TORCH_DDP_ASYMMETRIC_SUMMARY=1` enable summary lines
+  - `TORCH_DDP_ASYMMETRIC_SUMMARY_EVERY_STEPS=K` print one summary every K steps
+  - `TORCH_DDP_ASYMMETRIC_STEPS_PER_EPOCH=N` print one summary every N steps (epoch-like)
 

@@ -15,6 +15,9 @@ _ENABLED = False
 _DEBUG = False
 _DEBUG_EVERY_N = 1
 _DEBUG_EVENTS = set()
+_SUMMARY_ENABLED = False
+_SUMMARY_EVERY_STEPS = 0
+_SUMMARY_STEPS_PER_EPOCH = 0
 _RANK = -1
 _TRAINER_RANK = 0
 _SYNC_INTERVAL = 1
@@ -38,6 +41,10 @@ _ORIG_AUTO_BACKWARD = None
 _LAST_DDP_FOR_LOSS: Optional[DDP] = None
 _IN_REDIRECTED_DDP_FORWARD = False
 _DEBUG_COUNTERS = {}
+_SUMMARY_ACC = {}
+_SUMMARY_STEP_TOTAL = 0
+_SUMMARY_LAST_FLUSH_STEP = 0
+_SUMMARY_EPOCH_IDX = 0
 
 
 def _asymmetric_debug_enabled() -> bool:
@@ -62,6 +69,44 @@ def _debug_log(event: str, **fields) -> None:
     print(" | ".join(parts), flush=True)
 
 
+def _summary_add(metric: str, ms: float) -> None:
+    if not _SUMMARY_ENABLED:
+        return
+    _SUMMARY_ACC[metric] = float(_SUMMARY_ACC.get(metric, 0.0)) + float(ms)
+
+
+def _summary_flush_if_needed(is_trainer: bool) -> None:
+    global _SUMMARY_LAST_FLUSH_STEP, _SUMMARY_EPOCH_IDX
+    if not _SUMMARY_ENABLED:
+        return
+    step = _SUMMARY_STEP_TOTAL
+    if step <= 0:
+        return
+    window = None
+    if _SUMMARY_STEPS_PER_EPOCH > 0 and (step % _SUMMARY_STEPS_PER_EPOCH) == 0:
+        _SUMMARY_EPOCH_IDX += 1
+        window = f"epoch={_SUMMARY_EPOCH_IDX}"
+    elif _SUMMARY_EVERY_STEPS > 0 and (step % _SUMMARY_EVERY_STEPS) == 0:
+        window = f"step_window_end={step}"
+    if window is None:
+        return
+
+    window_steps = max(1, step - _SUMMARY_LAST_FLUSH_STEP)
+    total_ms = sum(float(v) for v in _SUMMARY_ACC.values())
+    parts = [
+        f"[auto-ddp-summary rank={_RANK}] {window}",
+        f"role={'trainer' if is_trainer else 'follower'}",
+        f"steps={window_steps}",
+        f"total_ms={total_ms:.3f}",
+        f"avg_step_ms={total_ms / window_steps:.3f}",
+    ]
+    for k in sorted(_SUMMARY_ACC.keys()):
+        parts.append(f"{k}_ms={float(_SUMMARY_ACC[k]):.3f}")
+    print(" | ".join(parts), flush=True)
+    _SUMMARY_ACC.clear()
+    _SUMMARY_LAST_FLUSH_STEP = step
+
+
 class _SkippedForwardToken:
     __slots__ = ("ddp",)
 
@@ -81,6 +126,9 @@ def _set_default_env() -> None:
     os.environ.setdefault("TORCH_DDP_ASYMMETRIC_DEBUG", "0")
     os.environ.setdefault("TORCH_DDP_ASYMMETRIC_DEBUG_EVERY_N", "1")
     os.environ.setdefault("TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS", "")
+    os.environ.setdefault("TORCH_DDP_ASYMMETRIC_SUMMARY", "0")
+    os.environ.setdefault("TORCH_DDP_ASYMMETRIC_SUMMARY_EVERY_STEPS", "0")
+    os.environ.setdefault("TORCH_DDP_ASYMMETRIC_STEPS_PER_EPOCH", "0")
     os.environ.setdefault("WORLD_SIZE", "1")
     os.environ.setdefault("RANK", "0")
 
@@ -209,10 +257,12 @@ def _patch_module_call() -> None:
             if _AUTO_SKIP_FOLLOWER_FORWARD and args and isinstance(args[0], _SkippedForwardToken):
                 t0 = time.perf_counter()
                 scalar = _LAST_DDP_FOR_LOSS.sync_scalar_from_trainer(None)
+                wall_ms = (time.perf_counter() - t0) * 1000.0
                 _debug_log(
                     "loss_follower_sync_scalar",
-                    wall_ms=(time.perf_counter() - t0) * 1000.0,
+                    wall_ms=wall_ms,
                 )
+                _summary_add("loss_sync_scalar", wall_ms)
                 return torch.tensor(float(scalar), dtype=torch.float32, device="cpu")
 
             # Trainer path: compute local scalar then broadcast to followers.
@@ -220,10 +270,12 @@ def _patch_module_call() -> None:
             out = _ORIG_MODULE_CALL(self, *args, **kwargs)
             if isinstance(out, torch.Tensor) and out.numel() == 1:
                 _LAST_DDP_FOR_LOSS.sync_scalar_from_trainer(float(out.detach().item()))
+            wall_ms = (time.perf_counter() - t_loss) * 1000.0
             _debug_log(
                 "loss_trainer_forward_plus_scalar_broadcast",
-                wall_ms=(time.perf_counter() - t_loss) * 1000.0,
+                wall_ms=wall_ms,
             )
+            _summary_add("loss_forward_plus_scalar", wall_ms)
             return out
 
         ddp = _MODULE_DDP.get(self, None)
@@ -234,6 +286,7 @@ def _patch_module_call() -> None:
             _LAST_DDP_FOR_LOSS = ddp
             if _AUTO_SKIP_FOLLOWER_FORWARD and _RANK != _TRAINER_RANK and _is_dist_enabled():
                 _debug_log("module_forward_skipped_follower", wall_ms=0.0)
+                _summary_add("module_forward_skipped", 0.0)
                 return _SkippedForwardToken(ddp)
             with _ddp_forward_guard():
                 _first_param = next(ddp.parameters(), None)
@@ -265,6 +318,7 @@ def _patch_module_call() -> None:
                     )
                 else:
                     _debug_log(f"module_forward_{role}", wall_ms=wall_ms)
+                _summary_add(f"module_forward_{role}", wall_ms)
                 return out
         return _ORIG_MODULE_CALL(self, *args, **kwargs)
 
@@ -294,6 +348,7 @@ def _patch_optimizer_step() -> None:
     _ORIG_OPTIMIZER_STEP = torch.optim.Optimizer.step
 
     def _wrapped_step(self, *args, **kwargs):
+        global _SUMMARY_STEP_TOTAL
         ddp = _OPTIMIZER_DDP.get(self, None)
         if ddp is None:
             return _ORIG_OPTIMIZER_STEP(self, *args, **kwargs)
@@ -302,17 +357,24 @@ def _patch_optimizer_step() -> None:
         t_step = time.perf_counter()
         result = _ORIG_OPTIMIZER_STEP(self, *args, **kwargs) if is_trainer else None
         if is_trainer:
+            step_ms = (time.perf_counter() - t_step) * 1000.0
             _debug_log(
                 "optimizer_step_local_trainer",
-                wall_ms=(time.perf_counter() - t_step) * 1000.0,
+                wall_ms=step_ms,
             )
+            _summary_add("optimizer_step_local", step_ms)
         else:
             _debug_log("optimizer_step_skipped_follower", wall_ms=0.0)
+            _summary_add("optimizer_step_skipped", 0.0)
 
         step = _OPTIMIZER_STEP_COUNT.get(self, 0) + 1
         _OPTIMIZER_STEP_COUNT[self] = step
+        _SUMMARY_STEP_TOTAL = max(_SUMMARY_STEP_TOTAL, step)
         if step % _SYNC_INTERVAL == 0:
+            t_sync = time.perf_counter()
             ddp.sync_params_from_trainer()
+            _summary_add("sync_params", (time.perf_counter() - t_sync) * 1000.0)
+        _summary_flush_if_needed(is_trainer=is_trainer)
         return result
 
     torch.optim.Optimizer.step = _wrapped_step
@@ -339,6 +401,7 @@ def _patch_backward_for_follower() -> None:
 
 def enable_from_env() -> None:
     global _ENABLED, _DEBUG, _DEBUG_EVERY_N, _DEBUG_EVENTS
+    global _SUMMARY_ENABLED, _SUMMARY_EVERY_STEPS, _SUMMARY_STEPS_PER_EPOCH
     global _RANK, _TRAINER_RANK, _SYNC_INTERVAL, _AUTO_SKIP_FOLLOWER_FORWARD
     if _ENABLED:
         return
@@ -359,6 +422,13 @@ def enable_from_env() -> None:
         for e in os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG_EVENTS", "").split(",")
         if e.strip()
     }
+    _SUMMARY_ENABLED = os.environ.get("TORCH_DDP_ASYMMETRIC_SUMMARY", "0") == "1"
+    _SUMMARY_EVERY_STEPS = max(
+        0, int(os.environ.get("TORCH_DDP_ASYMMETRIC_SUMMARY_EVERY_STEPS", "0"))
+    )
+    _SUMMARY_STEPS_PER_EPOCH = max(
+        0, int(os.environ.get("TORCH_DDP_ASYMMETRIC_STEPS_PER_EPOCH", "0"))
+    )
 
     _init_pg_if_needed()
     _patch_module_init()
