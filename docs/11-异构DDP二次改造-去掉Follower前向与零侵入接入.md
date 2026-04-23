@@ -101,21 +101,7 @@ flowchart LR
 
 ## 5. 用户接入方式（代码 0 修改）
 
-有两种方式，业务脚本都不改。
-
-### 方式 1：直接 launcher
-
-```bash
-# trainer
-MASTER_ADDR=10.60.82.27 MASTER_PORT=29623 \
-./pytorch_fork_asymmetric_ddp/auto_ddp/run_user_trainer.sh train.py --epochs 100
-
-# follower
-MASTER_ADDR=10.60.82.27 MASTER_PORT=29623 \
-./pytorch_fork_asymmetric_ddp/auto_ddp/run_user_follower.sh train.py --epochs 100
-```
-
-### 方式 2：保留用户原命令（平台常用）
+方式 2：保留用户原命令
 
 ```bash
 # trainer
@@ -125,7 +111,15 @@ source ./pytorch_fork_asymmetric_ddp/auto_ddp/setup_env_trainer.sh && python3 tr
 source ./pytorch_fork_asymmetric_ddp/auto_ddp/setup_env_follower.sh && python3 train.py --epochs 100
 ```
 
-这种方式尤其适合“平台只拿到用户原始命令、不能改命令结构”的场景。
+其中 `setup_env_follower.sh` 的职责是“只做环境注入，不改用户命令本身”：
+
+- 设置 follower 角色相关环境变量（如 `RANK=1`、`TORCH_DDP_TRAINER_RANK`、异构模式开关）；
+- 补齐分布式运行参数（`MASTER_ADDR/MASTER_PORT/WORLD_SIZE`）；
+- 配置 `PYTHONPATH` 以加载 `sitecustomize.py` 和 runtime auto-wrap；
+- 设定 follower 侧执行约束（例如 `CUDA_VISIBLE_DEVICES=""`）；
+- 自动探测并导出 `GLOO_SOCKET_IFNAME`，减少手工网络配置错误。
+
+执行 `source .../setup_env_follower.sh` 后，后面的 `python3 train.py --epochs 100` 仍是用户原始训练命令，仅运行时语义被自动接管为异构 follower 路径。
 
 ---
 
