@@ -6,6 +6,7 @@ import itertools
 import logging
 import os
 import sys
+import time
 import warnings
 import weakref
 from collections import defaultdict, deque
@@ -321,6 +322,26 @@ class _DDPJoinHook(JoinHook):
     def post_hook(self, is_last_joiner: bool):
         """Sync the final model to ensure that the model is the same across all processes."""
         self.ddp._sync_final_model(is_last_joiner)
+
+
+def _ddp_asymmetric_debug_enabled() -> bool:
+    return os.environ.get("TORCH_DDP_ASYMMETRIC_DEBUG", "0") == "1"
+
+
+def _ddp_asymmetric_debug_log(rank, event: str, **fields) -> None:
+    if not _ddp_asymmetric_debug_enabled():
+        return
+    parts = [f"[ddp-asym-debug rank={rank}] {event}"]
+    for k, v in fields.items():
+        if isinstance(v, float):
+            key = str(k)
+            if "ms" in key or key.endswith("_ms"):
+                parts.append(f"{k}={v:.4f}ms")
+            else:
+                parts.append(f"{k}={v:.6f}")
+        else:
+            parts.append(f"{k}={v}")
+    print(" | ".join(parts), flush=True)
 
 
 class DistributedDataParallel(Module, Joinable):
@@ -1430,21 +1451,38 @@ class DistributedDataParallel(Module, Joinable):
                 "sync_params_from_trainer requires TORCH_DDP_TRAINER_RANK to be set"
             )
         hetero_param_sync = bool(getattr(self, "_ddp_hetero_param_sync", False))
-        if not hetero_param_sync:
-            for p in self.module.parameters():
-                dist.broadcast(p.data, src=trainer_rank, group=self.process_group)
-            for b in self.module.buffers():
-                dist.broadcast(b.data, src=trainer_rank, group=self.process_group)
-            return
+        t_all = time.perf_counter()
+        broadcast_s = 0.0
+
+        def _broadcast_tensor(tensor):
+            nonlocal broadcast_s
+            t0 = time.perf_counter()
+            dist.broadcast(tensor, src=trainer_rank, group=self.process_group)
+            broadcast_s += time.perf_counter() - t0
 
         current_rank = dist.get_rank(self.process_group)
+        if not hetero_param_sync:
+            for p in self.module.parameters():
+                _broadcast_tensor(p.data)
+            for b in self.module.buffers():
+                _broadcast_tensor(b.data)
+            if _ddp_asymmetric_debug_enabled():
+                _ddp_asymmetric_debug_log(
+                    current_rank,
+                    "sync_params_from_trainer",
+                    total_ms=(time.perf_counter() - t_all) * 1000.0,
+                    broadcast_ms=broadcast_s * 1000.0,
+                    path="inplace",
+                )
+            return
+
         with torch.no_grad():
             for p in self.module.parameters():
                 if current_rank == trainer_rank:
                     cpu_tensor = p.data.detach().to(device="cpu")
                 else:
                     cpu_tensor = torch.empty_like(p.data, device="cpu")
-                dist.broadcast(cpu_tensor, src=trainer_rank, group=self.process_group)
+                _broadcast_tensor(cpu_tensor)
                 if p.data.device.type == "cpu":
                     p.data.copy_(cpu_tensor)
                 else:
@@ -1455,11 +1493,19 @@ class DistributedDataParallel(Module, Joinable):
                     cpu_tensor = b.data.detach().to(device="cpu")
                 else:
                     cpu_tensor = torch.empty_like(b.data, device="cpu")
-                dist.broadcast(cpu_tensor, src=trainer_rank, group=self.process_group)
+                _broadcast_tensor(cpu_tensor)
                 if b.data.device.type == "cpu":
                     b.data.copy_(cpu_tensor)
                 else:
                     b.data.copy_(cpu_tensor.to(device=b.data.device, dtype=b.data.dtype))
+        if _ddp_asymmetric_debug_enabled():
+            _ddp_asymmetric_debug_log(
+                current_rank,
+                "sync_params_from_trainer",
+                total_ms=(time.perf_counter() - t_all) * 1000.0,
+                broadcast_ms=broadcast_s * 1000.0,
+                path="hetero_cpu_staging",
+            )
 
     def sync_scalar_from_trainer(self, value=None):
         """
@@ -1481,6 +1527,7 @@ class DistributedDataParallel(Module, Joinable):
             )
 
         current_rank = dist.get_rank(self.process_group)
+        t_all = time.perf_counter()
         if current_rank == trainer_rank:
             if value is None:
                 raise RuntimeError("trainer rank must provide scalar value")
@@ -1488,8 +1535,18 @@ class DistributedDataParallel(Module, Joinable):
         else:
             cpu_tensor = torch.zeros(1, dtype=torch.float64, device="cpu")
 
+        t_bcast = time.perf_counter()
         dist.broadcast(cpu_tensor, src=trainer_rank, group=self.process_group)
-        return float(cpu_tensor.item())
+        broadcast_s = time.perf_counter() - t_bcast
+        result = float(cpu_tensor.item())
+        if _ddp_asymmetric_debug_enabled():
+            _ddp_asymmetric_debug_log(
+                current_rank,
+                "sync_scalar_from_trainer",
+                total_ms=(time.perf_counter() - t_all) * 1000.0,
+                broadcast_ms=broadcast_s * 1000.0,
+            )
+        return result
 
     def trainer_step(self, optimizer):
         """
